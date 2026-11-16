@@ -1,5 +1,6 @@
 """Обработчики шагов мастера заказа."""
 import html
+import re
 import math
 import time
 
@@ -8,11 +9,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from .. import draft as dr
+from .. import packing
 from ..catalog import TARIFFS
 from ..cdek import CdekClient, CdekError
 from ..config import Config
 from ..db import Database
-from ..wizard import (OrderSG, ask_cod_delivery, ask_items, point_from_item, search_city, ask_tariff, complete, edit_block, go_back, ikb, main_menu, make_ctx,
+from ..wizard import (OrderSG, ask_cod_delivery, ask_items, finish_packages, get_rules, render_packages, point_from_item, search_city, ask_tariff, complete, edit_block, go_back, ikb, main_menu, make_ctx,
                       render_list, render_services, send_list, show_summary)
 
 router = Router(name="order")
@@ -101,16 +103,47 @@ async def msg_city(m: Message, state: FSMContext, cdek: CdekClient, db: Database
 @router.message(OrderSG.packages, F.text)
 async def msg_packages(m: Message, state: FSMContext, cdek: CdekClient, db: Database, config: Config):
     c = make_ctx(m, state, cdek, db, config)
-    d = await c.draft()
     try:
-        pkgs = dr.parse_packages(m.text)
-    except ValueError as ex:
-        return await m.answer(f"⚠️ {e(str(ex))}")
-    total = sum(p["weight"] for p in pkgs)
-    await m.answer(f"✅ Мест: {len(pkgs)}, общий вес {dr.fmt_kg(total)} кг")
-    if d.get("order_type") == 1:
-        return await ask_items(c, pkgs, 0)
-    await complete(c, "packages", pkgs)
+        pkgs = dr.parse_packages(m.text)  # вес и габариты вручную
+    except ValueError as ex_dims:
+        if re.match(r"^\s*\d+(?:[.,]\d+)?\s*(?:кг|kg)?\s+\d", m.text):
+            return await m.answer(f"⚠️ {e(str(ex_dims))}")
+        try:  # названия вещей → по правилам
+            pkgs = packing.pack(await get_rules(c), packing.parse_names(m.text))
+        except ValueError as ex:
+            return await m.answer(f"⚠️ {e(str(ex))}. Пример: <code>пуховик, футболка 2</code> или <code>1.5 30x20x10</code>")
+    await finish_packages(c, pkgs)
+
+
+@router.callback_query(OrderSG.packages, F.data.startswith("pb:"))
+async def cb_basket(cb: CallbackQuery, state: FSMContext, cdek: CdekClient, db: Database, config: Config):
+    c = make_ctx(cb, state, cdek, db, config)
+    parts = cb.data.split(":")
+    rules = await get_rules(c)
+    basket = [list(x) for x in (await state.get_data()).get("basket") or []]
+    if parts[1] == "ok":
+        if not basket:
+            return await cb.answer("Коробка пуста", show_alert=True)
+        await cb.answer()
+        await cb.message.edit_reply_markup(reply_markup=None)
+        return await finish_packages(c, packing.pack(rules, [tuple(x) for x in basket]))
+    if parts[1] == "a":
+        i = int(parts[2])
+        if i >= len(rules.rules):
+            return await cb.answer("Правила изменились, откройте шаг заново", show_alert=True)
+        name = rules.rules[i].label.split("/")[0]
+        if basket and basket[-1][0] == name:
+            basket[-1][1] += 1
+        else:
+            basket.append([name, 1])
+    elif parts[1] == "pop" and basket:
+        basket[-1][1] -= 1
+        if basket[-1][1] <= 0:
+            basket.pop()
+    await state.update_data(basket=basket)
+    text, markup = render_packages(await c.draft(), rules, basket)
+    await cb.answer()
+    await cb.message.edit_text(text, reply_markup=markup)
 
 
 @router.message(OrderSG.items, F.text)
@@ -121,7 +154,8 @@ async def msg_items(m: Message, state: FSMContext, cdek: CdekClient, db: Databas
     if not pkgs:
         return await go_back(c)
     try:
-        items = dr.parse_items(m.text)
+        rules = await get_rules(c)
+        items = dr.parse_items(m.text, weight_for=lambda name: rules.item_dims(name)[0])
     except ValueError as ex:
         return await m.answer(f"⚠️ {e(str(ex))}")
     pkgs[idx]["items"] = items

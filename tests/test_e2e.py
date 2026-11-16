@@ -165,8 +165,8 @@ async def h(tmp_path, monkeypatch):
     h = Harness(tmp_path, monkeypatch)
     await h.db.init()
     yield h
-    from bot.handlers import common, order, orders, quick, templates
-    for r in (common.router, templates.router, orders.router, order.router, quick.router):
+    from bot.handlers import common, order, orders, quick, rules, templates
+    for r in (common.router, templates.router, orders.router, order.router, quick.router, rules.router):
         r._parent_router = None  # роутеры модульные — отвязываем для следующего теста
     await h.cdek.close()
     await h.db.close()
@@ -411,3 +411,57 @@ async def test_quick_request_same_street_pvz_tariff(h: Harness):
 async def test_unknown_text_shows_hint(h: Harness):
     s = await h.text("привет")
     assert "одним сообщением" in h.joined(s)
+
+
+async def _to_packages_step(h: Harness, otype: str = "ot:2"):
+    await h.text("📦 Новый заказ")
+    await h.click(otype)
+    if otype == "ot:1":
+        await h.click("num:gen")
+    await h.text("Моск")
+    return await h.text("Моск")
+
+
+async def test_packages_by_buttons(h: Harness):
+    j = h.joined
+    s = await _to_packages_step(h)
+    assert "pb:a:0" in h.buttons(s) and "pb:ok" not in h.buttons(s)
+    await h.click("pb:a:0")                        # Пуховик
+    s = await h.click("pb:a:5")                    # Футболка
+    assert "55×41×20" in j(s) and "1.27 кг" in j(s) and "pb:ok" in h.buttons(s)
+    await h.click("pb:a:5")
+    s = await h.click("pb:pop")                    # убрали одну футболку
+    assert "Футболка" in j(s) and "1.27 кг" in j(s)
+    s = await h.click("pb:ok")
+    assert "pk:tf:0" in h.buttons(s)               # дальше — тариф
+    data = await h.dp.storage.get_data(key=__import__("aiogram").fsm.storage.base.StorageKey(42, UID, UID))
+    assert data["draft"]["packages"] == [{"weight": 1270, "length": 55, "width": 41, "height": 20,
+                                         "comment": "Пуховик, Футболка"}]
+
+
+async def test_packages_by_names_and_im_item_weight_from_rules(h: Harness):
+    j = h.joined
+    await _to_packages_step(h, "ot:1")
+    s = await h.text("пуховик, футболка 2")
+    assert "Мест: 1, общий вес 1.54 кг" in j(s) and "55×41×25" in j(s)
+    assert "Товары в месте 1 из 1" in j(s)
+    s = await h.text("Пуховик Arctic + 8990\nФутболка белая + 1490 + + 2")
+    data = await h.dp.storage.get_data(key=__import__("aiogram").fsm.storage.base.StorageKey(42, UID, UID))
+    items = data["draft"]["packages"][0]["items"]
+    assert [(i["weight"], i["amount"]) for i in items] == [(1000, 1), (270, 2)]
+
+
+async def test_rules_edit(h: Harness):
+    j = h.joined
+    s = await h.text("/rules")
+    assert "Пуховик: пуховик" in j(s)
+    await h.click("rl:edit")
+    s = await h.text("Ваза: ваз = 2000 30x30x40\nПо умолчанию: 500 30x20x4, мин 8, макс 50")
+    assert "Сохранено правил: 1" in j(s)
+    s = await _to_packages_step(h)
+    assert "pb:a:0" in h.buttons(s) and "pb:a:1" not in h.buttons(s)
+    s = await h.text("ваза, книга")
+    assert "2.5 кг" in j(s) and "30×30×44" in j(s)
+    s = await h.text("/rules")
+    await h.click("rl:reset")
+    assert len((await h.db.get_setting(UID, "pack_rules")) or "") == 0

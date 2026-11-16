@@ -127,16 +127,22 @@ def parse_packages(text: str) -> list[dict]:
     return pkgs
 
 
-def parse_items(text: str) -> list[dict]:
-    """Строка: Название + цена + вес кг + [кол-во] + [артикул] (разделитель «+», также принимается «;»)."""
+def parse_items(text: str, weight_for=None) -> list[dict]:
+    """Строка: Название + цена + [вес кг] + [кол-во] + [артикул] (разделитель «+», также принимается «;»).
+    Если вес не указан — weight_for(name) (правила по названию товара)."""
     items = []
     for n, line in enumerate((l for l in text.splitlines() if l.strip()), 1):
         parts = [p.strip() for p in re.split(r"[+;]", line)]
-        if len(parts) < 3 or not parts[0]:
-            raise ValueError(f"Строка {n}: нужно минимум «Название + цена + вес»")
+        if len(parts) < 2 or not parts[0]:
+            raise ValueError(f"Строка {n}: нужно минимум «Название + цена»")
         try:
             cost = to_float(parts[1])
-            weight = round(to_float(parts[2]) * 1000)
+            if len(parts) > 2 and parts[2]:
+                weight = round(to_float(parts[2]) * 1000)
+            elif weight_for:
+                weight = weight_for(parts[0])
+            else:
+                raise ValueError(f"Строка {n}: укажите вес")
             amount = int(parts[3]) if len(parts) > 3 and parts[3] else 1
         except ValueError:
             raise ValueError(f"Строка {n}: цена, вес и количество должны быть числами")

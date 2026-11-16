@@ -11,7 +11,7 @@ from aiogram.types import BotCommand, ErrorEvent, Update
 from .cdek import CdekClient, CdekError
 from .config import load_config
 from .db import Database
-from .handlers import common, order, orders, quick, templates
+from .handlers import common, order, orders, quick, rules, templates
 
 log = logging.getLogger("cdek_bot")
 
@@ -74,7 +74,7 @@ def build_dispatcher(storage, cdek: CdekClient, db: Database, cfg) -> Dispatcher
     dp["cdek"], dp["db"], dp["config"] = cdek, db, cfg
     dp.update.outer_middleware(AccessMiddleware(cfg.allowed_users))
     # порядок важен: кнопки главного меню должны срабатывать на любом шаге мастера
-    dp.include_routers(common.router, templates.router, orders.router, quick.router, order.router)
+    dp.include_routers(common.router, templates.router, orders.router, rules.router, quick.router, order.router)
     dp.errors.register(on_error)
     return dp
 
@@ -107,6 +107,7 @@ async def main() -> None:
         BotCommand(command="templates", description="Шаблоны"),
         BotCommand(command="orders", description="Мои заказы"),
         BotCommand(command="track", description="Отследить по номеру"),
+        BotCommand(command="rules", description="Вес и габариты по названию товара"),
         BotCommand(command="savetpl", description="Сохранить текущие данные как шаблон"),
         BotCommand(command="cancel", description="Отменить"),
     ])

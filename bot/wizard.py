@@ -12,6 +12,7 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMa
                            ReplyKeyboardMarkup)
 
 from . import draft as dr
+from . import packing
 from .catalog import DELIVERY_MODES, POINT_TYPE, SERVICES, SIDE_EMOJI, TARIFFS
 from .cdek import CdekClient, CdekError
 from .config import Config
@@ -181,16 +182,61 @@ async def ask_city(c: Ctx, side: str) -> None:
     await c.send(f"🏙 Введите <b>город {what}</b> (можно начало названия):", ikb([NAV]))
 
 
-async def ask_packages(c: Ctx, d: dict) -> None:
-    await c.state.set_state(OrderSG.packages)
+async def get_rules(c: Ctx) -> "packing.Rules":
+    txt = await c.db.get_setting(c.tpl_owner, "pack_rules")
+    try:
+        return packing.parse_rules(txt or packing.DEFAULT_RULES_TEXT)
+    except ValueError:
+        return packing.parse_rules(packing.DEFAULT_RULES_TEXT)
+
+
+def packages_str(pkgs: list[dict]) -> str:
+    total = sum(p["weight"] for p in pkgs)
+    lines = [f"{n}. {dr.fmt_kg(p['weight'])} кг, {p['length']}×{p['width']}×{p['height']} см"
+             + (f" — {e(p['comment'])}" if p.get("comment") else "") for n, p in enumerate(pkgs, 1)]
+    return f"Мест: {len(pkgs)}, общий вес {dr.fmt_kg(total)} кг\n" + "\n".join(lines)
+
+
+def render_packages(d: dict, rules: "packing.Rules", basket: list) -> tuple[str, InlineKeyboardMarkup]:
     extra = "\nДля «Доставки» в конце строки можно указать описание вложения." if d.get("order_type") == 2 else \
         "\nПосле этого попрошу список товаров для каждого места."
-    await c.send(
-        "📦 <b>Грузовые места</b>\nКаждое место — отдельной строкой:\n"
-        "<code>вес_кг ДxШxВ_см [кол-во] [описание]</code>\n\nПримеры:\n"
-        "<code>1.5 30x20x10</code>\n<code>0.4 20x15x5 3 Документы</code>" + extra
-        + "\n\n💡 Коробки СДЭК можно добавить на шаге «Упаковка».",
-        ikb([NAV]))
+    text = ("📦 <b>Грузовые места</b>\n\n"
+            "<b>Вариант 1.</b> Нажимайте кнопки — вещи кладутся в коробку стопкой, вес и размеры посчитаются сами. "
+            "Или напишите названия: <code>пуховик, футболка 2</code>\n\n"
+            "<b>Вариант 2.</b> Вес и размеры вручную, место — строкой:\n"
+            "<code>вес_кг ДxШxВ_см [кол-во] [описание]</code>\nНапример: <code>1.5 30x20x10</code>" + extra)
+    if basket:
+        pkgs = packing.pack(rules, [tuple(x) for x in basket])
+        text += "\n\n🧺 <b>Уже в коробке:</b> " + ", ".join(
+            f"{e(n)} ×{q}" if q > 1 else e(n) for n, q in basket) + "\n" + packages_str(pkgs)
+    rows, row = [], []
+    for i, r in enumerate(rules.rules):
+        cnt = sum(q for n, q in basket if n == r.label.split("/")[0])
+        row.append((f"{'✅' if cnt else '➕'} {r.label.split('/')[0]}{f' ×{cnt}' if cnt else ''}", f"pb:a:{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    rows.append(row)
+    if basket:
+        rows.append([("✅ Готово", "pb:ok"), ("➖ Убрать последнюю", "pb:pop")])
+    rows.append(NAV)
+    return text, ikb(rows)
+
+
+async def ask_packages(c: Ctx, d: dict) -> None:
+    await c.state.set_state(OrderSG.packages)
+    await c.state.update_data(basket=[])
+    text, markup = render_packages(d, await get_rules(c), [])
+    await c.send(text + "\n\n<i>Правила веса и размеров по названию: /rules</i>", markup)
+
+
+async def finish_packages(c: Ctx, pkgs: list[dict]) -> None:
+    await c.send("✅ " + packages_str(pkgs))
+    d = await c.draft()
+    if d.get("order_type") == 1:
+        await ask_items(c, pkgs, 0)
+        return
+    await complete(c, "packages", pkgs)
 
 
 async def ask_items(c: Ctx, pkgs: list[dict], idx: int) -> None:
@@ -200,8 +246,9 @@ async def ask_items(c: Ctx, pkgs: list[dict], idx: int) -> None:
     await c.send(
         f"🧾 <b>Товары в месте {idx + 1} из {len(pkgs)}</b> ({dr.fmt_kg(p['weight'])} кг, "
         f"{p['length']}×{p['width']}×{p['height']} см)\nКаждый товар строкой:\n"
-        "<code>Название + цена ₽ + вес кг + [кол-во] + [артикул]</code>\n\nПример:\n"
-        "<code>Футболка белая + 1490 + 0.25 + 2 + TSH-01</code>\n<code>Кружка + 590 + 0.4</code>",
+        "<code>Название + цена ₽ + [вес кг] + [кол-во] + [артикул]</code>\n\nПример:\n"
+        "<code>Футболка белая + 1490 + 0.25 + 2 + TSH-01</code>\n<code>Кружка + 590 + 0.4</code>\n"
+        "<code>Пуховик + 8990</code>  ← вес по правилам /rules",
         ikb([NAV]))
 
 
@@ -526,5 +573,5 @@ async def show_summary(c: Ctx) -> None:
 
 
 __all__ = ["OrderSG", "Ctx", "make_ctx", "ikb", "NAV", "main_menu", "render_list", "send_list", "render_services",
-           "start_order", "advance", "ask_cod_delivery", "search_city", "point_from_item", "complete", "go_back", "edit_block", "show_summary", "ask_items", "ask_tariff",
+           "start_order", "advance", "ask_cod_delivery", "get_rules", "render_packages", "finish_packages", "search_city", "point_from_item", "complete", "go_back", "edit_block", "show_summary", "ask_items", "ask_tariff",
            "TARIFFS"]

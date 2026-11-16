@@ -21,6 +21,12 @@ CREATE TABLE IF NOT EXISTS orders (
     draft TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+    owner_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY(owner_id, key)
+);
 CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id, id DESC);
 """
 
@@ -65,6 +71,20 @@ class Database:
 
     async def delete_template(self, owner: int, tpl_id: int) -> None:
         await self.conn.execute("DELETE FROM templates WHERE owner_id=? AND id=?", (owner, tpl_id))
+        await self.conn.commit()
+
+    # ---------- настройки ----------
+    async def get_setting(self, owner: int, key: str) -> str | None:
+        cur = await self.conn.execute("SELECT value FROM settings WHERE owner_id=? AND key=?", (owner, key))
+        r = await cur.fetchone()
+        return r["value"] if r else None
+
+    async def set_setting(self, owner: int, key: str, value: str | None) -> None:
+        if value is None:
+            await self.conn.execute("DELETE FROM settings WHERE owner_id=? AND key=?", (owner, key))
+        else:
+            await self.conn.execute("INSERT INTO settings(owner_id, key, value) VALUES(?,?,?) "
+                                    "ON CONFLICT(owner_id, key) DO UPDATE SET value=excluded.value", (owner, key, value))
         await self.conn.commit()
 
     # ---------- заказы ----------

@@ -483,22 +483,30 @@ NAME_RE = re.compile(r"[А-ЯЁA-Z][а-яёa-zА-ЯЁA-Z\-]+(?:\s+[А-ЯЁA-Z][�
 ADDR_HINT_RE = re.compile(r"(?:^|\s)(?:ул|улица|пр|просп|проспект|пер|наб|ш|шоссе|б-р|бульвар|пл|д|дом|кв|пом|г)\.?\s", re.I)
 LIST_NUM_RE = re.compile(r"^\s*\d{1,2}\s*[.)]\s*")
 REGION_RE = re.compile(r"обл\b|область|край\b|респ\b|республика|россия|\bао\b|район|р-н", re.I)
-CITY_PREFIX_RE = re.compile(r"^(?:г\.?|город|гор\.|пгт\.?|пос\.?|п\.|с\.|дер\.)\s*", re.I)
+CITY_PREFIX_RE = re.compile(r"^(?:город|гор\.|г\.|г(?=\s)|пгт\.?(?=\s|$)|посёлок|поселок|пос\.|п\.|село|с\.|деревня|дер\.|д\.(?=\s*[А-ЯЁ]))\s*", re.I)
 STREET_STOP = {"улица", "проспект", "просп", "переулок", "пер", "набережная", "наб", "шоссе", "бульвар", "площадь",
                "дом", "корпус", "корп", "строение", "стр", "лит", "литера", "проезд", "тупик", "линия"}
 POINT_CODE_RE = re.compile(r"\b[A-Z]{2,5}\d{1,5}\b")
 
 
 def split_address(addr: str) -> tuple[str | None, str]:
-    """«190000, Санкт-Петербург, ул. Х, 5» → ("Санкт-Петербург", "ул. Х, 5")."""
+    """Выделяет город из адреса, где бы он ни стоял:
+    «190000, Санкт-Петербург, ул. Х, 5» / «Улица Зорге, 191, город Новосибирск» / «ул. Х, 5, Омск»."""
     parts = [p.strip() for p in addr.split(",") if p.strip()]
-    for i, p in enumerate(parts):
-        if re.fullmatch(r"\d{6}", p) or REGION_RE.search(p):
-            continue
-        if re.search(r"\d", p) or ADDR_HINT_RE.search(" " + p + " ") and not CITY_PREFIX_RE.match(p):
-            return None, ", ".join(parts[i:])  # город не указан — сразу улица
-        return CITY_PREFIX_RE.sub("", p).strip(), ", ".join(parts[i + 1:])
-    return None, addr.strip()
+    parts = [p for p in parts if not re.fullmatch(r"\d{6}", p) and not REGION_RE.search(p)]
+
+    def is_street(p: str) -> bool:
+        return bool(re.search(r"\d", p) or ADDR_HINT_RE.search(" " + p + " "))
+
+    city_idx = next((i for i, p in enumerate(parts) if CITY_PREFIX_RE.match(p)), None)  # «г. Омск», «город Омск»
+    if city_idx is None and parts and not is_street(parts[0]) and len(parts) > 1:
+        city_idx = 0                                                                      # город в начале
+    if city_idx is None and len(parts) > 1 and not is_street(parts[-1]) and any(map(is_street, parts[:-1])):
+        city_idx = len(parts) - 1                                                         # город в конце
+    if city_idx is None:
+        return None, ", ".join(parts) or addr.strip()
+    city = CITY_PREFIX_RE.sub("", parts[city_idx]).strip()
+    return city or None, ", ".join(p for i, p in enumerate(parts) if i != city_idx)
 
 
 def parse_quick_request(text: str) -> dict:

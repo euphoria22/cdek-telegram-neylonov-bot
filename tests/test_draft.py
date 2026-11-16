@@ -80,3 +80,15 @@ def test_parse_quick_request():
     exact, street = dr.match_points(items, "ул. Адмирала Трибуца, 5, пом. 37-Н")
     assert [x["code"] for x in exact] == ["SPB1"] and len(street) == 2
     assert dr.match_points(items, "ПВЗ SPB2")[0][0]["code"] == "SPB2"
+
+
+@pytest.mark.parametrize("addr,city,rest", [
+    ("Улица Зорге, 191, город Новосибирск", "Новосибирск", "Улица Зорге, 191"),
+    ("ул. Зорге, 191, Новосибирск", "Новосибирск", "ул. Зорге, 191"),
+    ("Гатчина, ул. Ленина, 1", "Гатчина", "ул. Ленина, 1"),
+    ("г.Омск, пр-т Мира 5", "Омск", "пр-т Мира 5"),
+    ("190000, Ленинградская обл., г. Всеволожск, ул. Ленина, 10", "Всеволожск", "ул. Ленина, 10"),
+    ("ул. Ленина, 10", None, "ул. Ленина, 10"),
+])
+def test_split_address(addr, city, rest):
+    assert dr.split_address(addr) == (city, rest)

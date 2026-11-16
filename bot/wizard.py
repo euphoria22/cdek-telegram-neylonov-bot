@@ -177,8 +177,8 @@ async def ask_items(c: Ctx, pkgs: list[dict], idx: int) -> None:
     await c.send(
         f"🧾 <b>Товары в месте {idx + 1} из {len(pkgs)}</b> ({dr.fmt_kg(p['weight'])} кг, "
         f"{p['length']}×{p['width']}×{p['height']} см)\nКаждый товар строкой:\n"
-        "<code>Название; цена ₽; вес кг; [кол-во]; [артикул]</code>\n\nПример:\n"
-        "<code>Футболка белая; 1490; 0.25; 2; TSH-01</code>\n<code>Кружка; 590; 0.4</code>",
+        "<code>Название + цена ₽ + вес кг + [кол-во] + [артикул]</code>\n\nПример:\n"
+        "<code>Футболка белая + 1490 + 0.25 + 2 + TSH-01</code>\n<code>Кружка + 590 + 0.4</code>",
         ikb([NAV]))
 
 

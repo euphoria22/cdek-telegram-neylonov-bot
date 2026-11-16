@@ -128,12 +128,12 @@ def parse_packages(text: str) -> list[dict]:
 
 
 def parse_items(text: str) -> list[dict]:
-    """Строка: Название; цена; вес кг; [кол-во]; [артикул]"""
+    """Строка: Название + цена + вес кг + [кол-во] + [артикул] (разделитель «+», также принимается «;»)."""
     items = []
     for n, line in enumerate((l for l in text.splitlines() if l.strip()), 1):
-        parts = [p.strip() for p in line.split(";")]
+        parts = [p.strip() for p in re.split(r"[+;]", line)]
         if len(parts) < 3 or not parts[0]:
-            raise ValueError(f"Строка {n}: нужно минимум «Название; цена; вес»")
+            raise ValueError(f"Строка {n}: нужно минимум «Название + цена + вес»")
         try:
             cost = to_float(parts[1])
             weight = round(to_float(parts[2]) * 1000)

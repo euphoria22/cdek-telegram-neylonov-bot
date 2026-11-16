@@ -13,7 +13,7 @@ def test_parse_packages():
 
 
 def test_parse_items_and_person():
-    items = dr.parse_items("Футболка; 1490; 0.25; 2; TSH\nКружка; 590,5; 0.4")
+    items = dr.parse_items("Футболка + 1490 + 0.25 + 2 + TSH\nКружка; 590,5; 0.4")
     assert items[0]["weight"] == 250 and items[0]["amount"] == 2 and items[0]["ware_key"] == "TSH"
     assert items[1]["cost"] == 590.5 and items[1]["amount"] == 1
     p = dr.parse_person("Иванов Иван\n8 (999) 123-45-67\nООО Ромашка\nivan@example.com")

@@ -272,7 +272,7 @@ async def test_im_order_with_items_and_cod(h: Harness):
     await h.text("Моск")
     s = await h.text("1 20x20x20\n0.5 10x10x10")
     assert "место 1 из 2" in j(s).lower() or "месте 1 из 2" in j(s).lower()
-    s = await h.text("Футболка; 1000; 0.3; 2")
+    s = await h.text("Футболка + 1000 + 0.3 + 2")
     assert "2 из 2" in j(s)
     s = await h.text("Кепка; 500; 0.2")
     s = await h.click("pk:tf:2")                   # 137 склад-дверь

@@ -65,3 +65,18 @@ def test_build_order_im():
     assert "sender" not in o
     calc = dr.build_calc(d)
     assert {"code": "INSURANCE", "parameter": "200.0"} in calc["services"]
+
+
+def test_parse_quick_request():
+    r = dr.parse_quick_request("1. Иванов Алексей Сергеевич\n\n2. Санкт-Петербург, ул. Адмирала Трибуца, 5, пом. 37-Н"
+                               "\n\n3. +79990257058 (это получатели)")
+    assert r["recipient"] == {"name": "Иванов Алексей Сергеевич", "phone": "+79990257058"}
+    assert r["city"] == "Санкт-Петербург" and r["address"] == "ул. Адмирала Трибуца, 5, пом. 37-Н"
+    r = dr.parse_quick_request("+7 (999) 111-22-33\nПетрова Мария\n190000, Ленинградская обл., г. Всеволожск, ул. Ленина, 10")
+    assert r["city"] == "Всеволожск" and r["address"] == "ул. Ленина, 10"
+    with pytest.raises(ValueError):
+        dr.parse_quick_request("Иванов Иван\nМосква, ул. Ленина, 1")  # нет телефона
+    items = [{"code": "SPB1", "address": "ул. Адмирала Трибуца, 5"}, {"code": "SPB2", "address": "ул. Адмирала Трибуца, 15"}]
+    exact, street = dr.match_points(items, "ул. Адмирала Трибуца, 5, пом. 37-Н")
+    assert [x["code"] for x in exact] == ["SPB1"] and len(street) == 2
+    assert dr.match_points(items, "ПВЗ SPB2")[0][0]["code"] == "SPB2"

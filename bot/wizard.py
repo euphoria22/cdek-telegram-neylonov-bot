@@ -152,8 +152,31 @@ async def ask_number(c: Ctx, d: dict) -> None:
                  ikb([[("🎲 Сгенерировать", "num:gen")], NAV]))
 
 
+async def search_city(c: Ctx, side: str, q: str) -> None:
+    """Поиск города: один результат — выбираем сразу, несколько — список."""
+    cities = await c.cdek.find_cities(q)
+    exact = [x for x in cities if (x.get("name") or "").lower() == q.lower()]
+    if len(exact) == 1:
+        cities = exact
+    if not cities:
+        await c.send(f"Город «{e(q)}» не найден, введите иначе.")
+        return
+    if len(cities) == 1:
+        await c.send(f"✅ {e(cities[0]['label'])}")
+        await complete(c, f"{side}_city", cities[0])
+        return
+    await send_list(c, "fc" if side == "from" else "tc", cities,
+                    "🏙 Выберите город " + ("отправления" if side == "from" else "получения"))
+
+
 async def ask_city(c: Ctx, side: str) -> None:
     await c.state.set_state(OrderSG.from_city if side == "from" else OrderSG.to_city)
+    d = await c.draft()
+    if side == "to" and d.get("_to_city_q"):
+        q = d.pop("_to_city_q")
+        await c.save(d)
+        await search_city(c, side, q)
+        return
     what = "отправления" if side == "from" else "получения"
     await c.send(f"🏙 Введите <b>город {what}</b> (можно начало названия):", ikb([NAV]))
 
@@ -204,9 +227,38 @@ async def calc_missing_tariffs(c: Ctx, d: dict, known: set) -> list[dict]:
     return [r for r in res if r]
 
 
+def point_from_item(it: dict, city: dict) -> dict:
+    kind = "postamat" if it.get("type") == "POSTAMAT" else "pvz"
+    return {"kind": kind, "code": it["code"], "address": it["address"], "work_time": it.get("work_time", ""),
+            "city_code": city["code"], "city": city}
+
+
+async def match_hint_point(c: Ctx, d: dict) -> dict | None:
+    """Адрес из запроса совпадает с ПВЗ/постаматом СДЭК? Тогда это доставка до пункта."""
+    try:
+        points = await c.cdek.delivery_points(d["to_city"]["code"], "ALL", handout=True)
+    except CdekError:
+        return None
+    exact, _ = dr.match_points([point_item(p) for p in points], d["_to_address"])
+    if not exact:
+        return None
+    exact.sort(key=lambda it: it.get("type") != "PVZ")  # ПВЗ приоритетнее постамата по тому же адресу
+    return point_from_item(exact[0], d["to_city"])
+
+
 async def ask_tariff(c: Ctx, d: dict) -> None:
     await c.state.set_state(OrderSG.tariff)
     await c.bot.send_chat_action(c.chat_id, "typing")
+    if d.get("_to_address") and not d.get("to_point"):
+        point = await match_hint_point(c, d)
+        if point:
+            d.pop("_to_address")
+            d["to_point"] = point
+            await c.save(d)
+            what = "постамат" if point["kind"] == "postamat" else "ПВЗ"
+            await c.send(f"📍 Адрес получателя совпадает с {what} <code>{e(point['code'])}</code> "
+                         f"{e(point['address'])} — выбран он, показываю тарифы до пункта.\n"
+                         "<i>Нужна доставка курьером? В сводке нажмите «✏️ Тариф».</i>")
     try:
         tariffs = await c.cdek.tariff_list(dr.build_tarifflist(d))
     except CdekError as ex:
@@ -264,6 +316,15 @@ async def ask_point(c: Ctx, d: dict, side: str) -> None:
     city = d[f"{side}_city"]
     await c.state.set_state(OrderSG.from_point if side == "from" else OrderSG.to_point)
     await c.state.update_data(point_side=side, point_kind=kind)
+    hint = d.get("_to_address") if side == "to" else None
+    if hint:
+        d.pop("_to_address")
+        await c.save(d)
+    if kind == "door" and hint:
+        await c.send(f"🏠 Адрес доставки курьером (из запроса): {e(hint)}\n"
+                     "<i>Изменить можно в сводке — «✏️ ПВЗ/адрес получ.».</i>")
+        await complete(c, "to_point", {"kind": "door", "address": hint[:255], "city_code": city["code"], "city": city})
+        return
     if kind == "door":
         who = "забора груза (откуда заберёт курьер)" if side == "from" else "доставки получателю"
         await c.send(f"🏠 Введите <b>адрес {who}</b> в г. {e(city['name'])}:\n"
@@ -282,6 +343,13 @@ async def ask_point(c: Ctx, d: dict, side: str) -> None:
     await c.send(f"{SIDE_EMOJI[kind]} Выбор пункта ({what}) {'отправки' if side == 'from' else 'получения'} "
                  f"в г. {e(city['name'])}.\n\nМожно:\n• выбрать из списка;\n• написать часть адреса, метро или код пункта;\n"
                  "• отправить геолокацию — покажу ближайшие.", location_kb())
+    if hint:
+        exact, street = dr.match_points(items, hint)
+        found = exact + [it for it in street if it not in exact]
+        if found:
+            await send_list(c, "tp", found, f"<b>Пункты рядом с адресом из запроса</b>\n{e(hint)}")
+            return
+        await c.send(f"На улице из запроса ({e(hint)}) пунктов нет — показываю все.")
     await send_list(c, "fp" if side == "from" else "tp", items, f"<b>Пункты в г. {e(city['name'])}</b>")
 
 
@@ -458,5 +526,5 @@ async def show_summary(c: Ctx) -> None:
 
 
 __all__ = ["OrderSG", "Ctx", "make_ctx", "ikb", "NAV", "main_menu", "render_list", "send_list", "render_services",
-           "start_order", "advance", "ask_cod_delivery", "complete", "go_back", "edit_block", "show_summary", "ask_items", "ask_tariff",
+           "start_order", "advance", "ask_cod_delivery", "search_city", "point_from_item", "complete", "go_back", "edit_block", "show_summary", "ask_items", "ask_tariff",
            "TARIFFS"]

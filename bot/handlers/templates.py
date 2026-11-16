@@ -135,10 +135,11 @@ async def cmd_templates(m: Message, state: FSMContext, cdek: CdekClient, db: Dat
 async def cb_tpl(cb: CallbackQuery, state: FSMContext, cdek: CdekClient, db: Database, config: Config):
     _, action, tid = cb.data.split(":")
     c = make_ctx(cb, state, cdek, db, config)
+    prefill = (await state.get_data()).get("prefill") or {}  # получатель из быстрого запроса
     if action == "new":  # новый заказ «с нуля» из меню выбора
         await cb.answer()
         await cb.message.edit_reply_markup(reply_markup=None)
-        return await start_order(c)
+        return await start_order(c, prefill)
     if action == "list":
         await cb.answer()
         return await show_templates(c, edit=cb.message)
@@ -155,7 +156,10 @@ async def cb_tpl(cb: CallbackQuery, state: FSMContext, cdek: CdekClient, db: Dat
     elif action == "use":
         await cb.message.edit_reply_markup(reply_markup=None)
         filled = ", ".join(t for k, t in TEMPLATE_BLOCKS if k in tpl["data"])
-        await start_order(c, tpl["data"], f"📄 Шаблон «{e(tpl['name'])}» применён.\nУже заполнено: {filled}.")
+        base = {**tpl["data"], **prefill}
+        if prefill.get("to_city") or prefill.get("_to_city_q"):
+            base.pop("to_point", None)  # пункт получения из шаблона не подходит новому получателю
+        await start_order(c, base, f"📄 Шаблон «{e(tpl['name'])}» применён.\nУже заполнено: {filled}.")
     elif action == "del":
         await cb.message.edit_text(f"Удалить шаблон «{e(tpl['name'])}»?", reply_markup=ikb([
             [("🗑 Да, удалить", f"tp:delok:{tid}"), ("Отмена", f"tp:v:{tid}")]]))

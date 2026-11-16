@@ -44,6 +44,8 @@ POINTS = [
      "location": {"address": "ул. Тверская, 7", "latitude": 55.757, "longitude": 37.613}},
     {"code": "MSK200", "name": "На Арбате", "type": "PVZ", "work_time": "Пн-Вс 9-20",
      "location": {"address": "ул. Арбат, 10", "latitude": 55.75, "longitude": 37.59}},
+    {"code": "SPB5", "name": "Трибуца", "type": "PVZ", "work_time": "Пн-Вс 10-20",
+     "location": {"address": "ул. Адмирала Трибуца, 5", "latitude": 59.85, "longitude": 30.15}},
 ]
 
 
@@ -163,8 +165,8 @@ async def h(tmp_path, monkeypatch):
     h = Harness(tmp_path, monkeypatch)
     await h.db.init()
     yield h
-    from bot.handlers import common, order, orders, templates
-    for r in (common.router, templates.router, orders.router, order.router):
+    from bot.handlers import common, order, orders, quick, templates
+    for r in (common.router, templates.router, orders.router, order.router, quick.router):
         r._parent_router = None  # роутеры модульные — отвязываем для следующего теста
     await h.cdek.close()
     await h.db.close()
@@ -336,3 +338,76 @@ async def test_im_recipient_pays_delivery_with_markup(h: Harness):
     o = h.fake.orders[-1]
     assert o["delivery_recipient_cost"] == {"value": 385.0}
     assert o["packages"][0]["items"][0]["payment"] == {"value": 0}
+
+
+REQUEST_PVZ = """1. Иванов Алексей Сергеевич
+
+2. Санкт-Петербург, ул. Адмирала Трибуца, 5, пом. 37-Н
+
+3. +79990257058"""
+
+
+async def test_quick_request_address_is_pvz(h: Harness):
+    j = h.joined
+    s = await h.text(REQUEST_PVZ)
+    assert "Иванов Алексей Сергеевич" in j(s) and "Санкт-Петербург" in j(s) and "ot:2" in h.buttons(s)
+    await h.click("ot:2")
+    s = await h.text("Моск")
+    assert "Грузовые места" in j(s)                # город получения взят из запроса
+    s = await h.text("1 20x20x10")
+    assert "совпадает с ПВЗ <code>SPB5</code>" in j(s)
+    assert len([b for b in h.buttons(s) if b.startswith("pk:tf:")]) == 2  # только тарифы до ПВЗ: 136, 234
+    s = await h.click("pk:tf:0")
+    s = await h.click("pk:fp:0")
+    assert "Страховка" in j(s)                     # пункт получения уже выбран
+    await h.text("0")
+    await h.click("sv:ok")
+    s = await h.text("Петров Пётр\n+79991112233")
+    assert "Комментарий" in j(s)                   # получатель не спрашивается
+    s = await h.click("cm:skip")
+    assert "Проверьте заказ" in j(s)
+    await h.click("sm:create")
+    o = h.fake.orders[-1]
+    assert o["delivery_point"] == "SPB5" and o["tariff_code"] == 136
+    assert o["recipient"] == {"name": "Иванов Алексей Сергеевич", "phones": [{"number": "+79990257058"}]}
+
+
+async def test_quick_request_courier_address_with_template(h: Harness):
+    j = h.joined
+    await h.db.save_template(UID, "Из Москвы", {"order_type": 2, "from_city": {"code": 44, "name": "Москва",
+                                                                               "label": "Москва, Россия"}})
+    s = await h.text("Петрова Мария\nМосква, ул. Ленина, 10, кв. 5\n8 999 123 45 67")
+    assert "tp:use:1" in h.buttons(s)
+    s = await h.click("tp:use:1")
+    assert "Грузовые места" in j(s)                # тип и город отправки — из шаблона, город получения — из запроса
+    s = await h.text("1 20x20x10")
+    assert "совпадает" not in j(s) and len([b for b in h.buttons(s) if b.startswith("pk:tf:")]) == 4
+    s = await h.click("pk:tf:3")                   # 139 дверь-дверь
+    assert "адрес забора" in j(s)
+    s = await h.text("ул. Пушкина, 1")
+    assert "из запроса" in j(s) and "Страховка" in j(s)  # адрес курьеру подставлен
+    await h.text("0")
+    await h.click("sv:ok")
+    await h.text("Петров Пётр\n+79991112233")
+    await h.click("cm:skip")
+    await h.click("sm:create")
+    o = h.fake.orders[-1]
+    assert o["to_location"] == {"code": 44, "address": "ул. Ленина, 10, кв. 5"}
+    assert o["recipient"]["name"] == "Петрова Мария" and o["recipient"]["phones"] == [{"number": "+79991234567"}]
+
+
+async def test_quick_request_same_street_pvz_tariff(h: Harness):
+    j = h.joined
+    await h.text("Сидоров Сидор\nМосква, ул. Арбат, 3\n+79990000001")
+    await h.click("ot:2")
+    await h.text("Моск")
+    s = await h.text("1 20x20x10")
+    assert "совпадает" not in j(s)                 # дом 3 ≠ ПВЗ в доме 10
+    await h.click("pk:tf:0")                       # 136 до ПВЗ
+    s = await h.click("pk:fp:0")
+    assert "рядом с адресом" in j(s) and "<code>MSK200</code> ул. Арбат" in j(s) and "Найдено: 1" in j(s)
+
+
+async def test_unknown_text_shows_hint(h: Harness):
+    s = await h.text("привет")
+    assert "одним сообщением" in h.joined(s)

@@ -475,3 +475,99 @@ def summary_text(d: dict, calc: dict | None = None, calc_err: str | None = None)
 def order_title(d: dict) -> str:
     rcp = (d.get("recipient") or {}).get("name", "")
     return f"{d['from_city']['name']} → {d['to_city']['name']}, {rcp}"[:120]
+
+
+# ---------------------------------------------------------------- быстрый запрос «получатель одним сообщением»
+PHONE_RE = re.compile(r"(?:\+7|8|7)[\s\-()]*\d{3}[\s\-()]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}")
+NAME_RE = re.compile(r"[А-ЯЁA-Z][а-яёa-zА-ЯЁA-Z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-zА-ЯЁA-Z\-.]*){1,3}")
+ADDR_HINT_RE = re.compile(r"(?:^|\s)(?:ул|улица|пр|просп|проспект|пер|наб|ш|шоссе|б-р|бульвар|пл|д|дом|кв|пом|г)\.?\s", re.I)
+LIST_NUM_RE = re.compile(r"^\s*\d{1,2}\s*[.)]\s*")
+REGION_RE = re.compile(r"обл\b|область|край\b|респ\b|республика|россия|\bао\b|район|р-н", re.I)
+CITY_PREFIX_RE = re.compile(r"^(?:г\.?|город|гор\.|пгт\.?|пос\.?|п\.|с\.|дер\.)\s*", re.I)
+STREET_STOP = {"улица", "проспект", "просп", "переулок", "пер", "набережная", "наб", "шоссе", "бульвар", "площадь",
+               "дом", "корпус", "корп", "строение", "стр", "лит", "литера", "проезд", "тупик", "линия"}
+POINT_CODE_RE = re.compile(r"\b[A-Z]{2,5}\d{1,5}\b")
+
+
+def split_address(addr: str) -> tuple[str | None, str]:
+    """«190000, Санкт-Петербург, ул. Х, 5» → ("Санкт-Петербург", "ул. Х, 5")."""
+    parts = [p.strip() for p in addr.split(",") if p.strip()]
+    for i, p in enumerate(parts):
+        if re.fullmatch(r"\d{6}", p) or REGION_RE.search(p):
+            continue
+        if re.search(r"\d", p) or ADDR_HINT_RE.search(" " + p + " ") and not CITY_PREFIX_RE.match(p):
+            return None, ", ".join(parts[i:])  # город не указан — сразу улица
+        return CITY_PREFIX_RE.sub("", p).strip(), ", ".join(parts[i + 1:])
+    return None, addr.strip()
+
+
+def parse_quick_request(text: str) -> dict:
+    """Получатель одним сообщением: ФИО, адрес (ПВЗ или для курьера), телефон — в любом порядке."""
+    phone = email = name = addr = None
+    for raw in text.splitlines():
+        line = LIST_NUM_RE.sub("", raw).strip()
+        if not line:
+            continue
+        if phone is None:
+            m = PHONE_RE.search(line)
+            if m:
+                phone = normalize_phone(m.group())
+                line = re.sub(r"\(.*?\)", "", line[:m.start()] + line[m.end():]).strip(" ,;-–")
+                if not line:
+                    continue
+        if email is None and re.fullmatch(r"\S+@\S+\.\S+", line):
+            email = line
+        elif addr is None and ("," in line or ADDR_HINT_RE.search(" " + line + " ")):
+            addr = line
+        elif name is None and NAME_RE.fullmatch(line):
+            name = line
+    missing = [t for t, v in (("ФИО", name), ("телефон", phone), ("адрес", addr)) if not v]
+    if missing:
+        raise ValueError("не нашёл: " + ", ".join(missing))
+    city, street = split_address(addr)
+    person = {"name": name[:255], "phone": phone}
+    if email:
+        person["email"] = email
+    return {"recipient": person, "city": city, "address": street or addr, "full_address": addr}
+
+
+def street_key(address: str) -> tuple[list[str], str | None]:
+    """Слова названия улицы и номер дома: «ул. Адмирала Трибуца, 5, пом. 37-Н» → (["адмирала","трибуца"], "5")."""
+    main = re.split(r",\s*(?:кв|пом|оф|офис|помещение|квартира|под|подъезд|эт|этаж)\b", address, flags=re.I)[0]
+    segs = [s.strip() for s in main.split(",") if s.strip()]
+    words, house, street_idx = [], None, None
+    for i, s in enumerate(segs):
+        w = [x for x in re.findall(r"[а-яёa-z]+", s.lower()) if len(x) >= 3 and x not in STREET_STOP]
+        if w:
+            words, street_idx = w, i
+            break
+    if street_idx is not None:
+        for s in segs[street_idx + 1:]:
+            m = re.search(r"\d+\s*[а-яa-z]?(?:/\d+)?", s.lower())
+            if m:
+                house = m.group().replace(" ", "")
+                break
+        if house is None:
+            nums = re.findall(r"\d+[а-яa-z]?", segs[street_idx].lower())
+            house = nums[-1] if nums else None
+    return words, house
+
+
+def match_points(items: list[dict], address: str) -> tuple[list[dict], list[dict]]:
+    """Пункты, совпадающие с адресом: (точно — улица и дом, на той же улице)."""
+    code = POINT_CODE_RE.search(address.upper())
+    if code:
+        exact = [it for it in items if it["code"].upper() == code.group()]
+        if exact:
+            return exact, exact
+    words, house = street_key(address)
+    if not words:
+        return [], []
+    street = [it for it in items if all(w in it["address"].lower().replace("ё", "е") for w in
+                                        (x.replace("ё", "е") for x in words))]
+    exact = []
+    if house:
+        rx = re.compile(rf"(?<![\d]){re.escape(house)}(?![\dа-яa-z])")
+        exact = [it for it in street if rx.search(it["address"].lower().replace(" ", ""))
+                 or rx.search(it["address"].lower())]
+    return exact, street

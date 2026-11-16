@@ -12,7 +12,7 @@ from ..catalog import TARIFFS
 from ..cdek import CdekClient, CdekError
 from ..config import Config
 from ..db import Database
-from ..wizard import (OrderSG, ask_cod_delivery, ask_items, ask_tariff, complete, edit_block, go_back, ikb, main_menu, make_ctx,
+from ..wizard import (OrderSG, ask_cod_delivery, ask_items, point_from_item, search_city, ask_tariff, complete, edit_block, go_back, ikb, main_menu, make_ctx,
                       render_list, render_services, send_list, show_summary)
 
 router = Router(name="order")
@@ -94,16 +94,7 @@ async def msg_city(m: Message, state: FSMContext, cdek: CdekClient, db: Database
     q = m.text.strip()
     if len(q) < 2:
         return await m.answer("Введите хотя бы 2 буквы")
-    cities = await cdek.find_cities(q)
-    c = make_ctx(m, state, cdek, db, config)
-    if not cities:
-        return await m.answer("Ничего не найдено, попробуйте иначе")
-    if len(cities) == 1:
-        it = cities[0]
-        await m.answer(f"✅ {e(it['label'])}")
-        return await complete(c, f"{side}_city", it)
-    await send_list(c, "fc" if side == "from" else "tc", cities,
-                    "🏙 Выберите город " + ("отправления" if side == "from" else "получения"))
+    await search_city(make_ctx(m, state, cdek, db, config), side, q)
 
 
 # ---------------------------------------------------------------- места и товары
@@ -181,9 +172,7 @@ async def msg_tariff_code(m: Message, state: FSMContext, cdek: CdekClient, db: D
 async def choose_point(c, side: str, it: dict) -> None:
     d = await c.draft()
     city = d[f"{side}_city"]
-    kind = "postamat" if it.get("type") == "POSTAMAT" else "pvz"
-    point = {"kind": kind, "code": it["code"], "address": it["address"], "work_time": it.get("work_time", ""),
-             "city_code": city["code"], "city": city}
+    point = point_from_item(it, city)
     await c.send(f"✅ Пункт {'отправки' if side == 'from' else 'получения'}: <code>{e(it['code'])}</code> "
                  f"{e(it['address'])}", main_menu())
     await complete(c, f"{side}_point", point)

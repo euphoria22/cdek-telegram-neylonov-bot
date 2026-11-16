@@ -507,3 +507,22 @@ async def test_cdek_boxes_added_when_services_in_template(h: Harness):
     await h.pkgs("0.4 15x10x8\n0.4 15x10x8", choice="bx:yes")
     data = await h.dp.storage.get_data(key=__import__("aiogram").fsm.storage.base.StorageKey(42, UID, UID))
     assert data["draft"]["services"] == {"SMS": True, "CARTON_BOX_XS": 2}
+
+
+async def test_im_items_prefilled_from_packages_step(h: Harness):
+    j = h.joined
+    await _to_packages_step(h, "ot:1")
+    await h.click("pb:a:0")                        # Пуховик
+    await h.click("pb:a:5")
+    await h.click("pb:a:5")                        # Футболка ×2
+    s = await h.pkgs(click="pb:ok")
+    assert "взял с прошлого шага" in j(s) and "1. Пуховик (1 кг/шт)" in j(s) and "2. Футболка ×2 (0.27 кг/шт)" in j(s)
+    s = await h.text("1490")
+    assert "Нужно 2 цен" in j(s)                   # неверное число цен — понятная ошибка
+    s = await h.text("8990 1490")
+    assert "pk:tf:0" in h.buttons(s)               # дальше — тариф
+    data = await h.dp.storage.get_data(key=__import__("aiogram").fsm.storage.base.StorageKey(42, UID, UID))
+    [p] = data["draft"]["packages"]
+    assert "_things" not in p
+    assert [(i["name"], i["cost"], i["weight"], i["amount"]) for i in p["items"]] == [
+        ("Пуховик", 8990.0, 1000, 1), ("Футболка", 1490.0, 270, 2)]

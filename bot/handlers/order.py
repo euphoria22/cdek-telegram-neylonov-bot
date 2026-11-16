@@ -171,11 +171,14 @@ async def msg_items(m: Message, state: FSMContext, cdek: CdekClient, db: Databas
     if not pkgs:
         return await go_back(c)
     try:
-        rules = await get_rules(c)
-        items = dr.parse_items(m.text, weight_for=lambda name: rules.item_dims(name)[0])
+        items = dr.parse_prices(m.text, pkgs[idx]["_things"]) if pkgs[idx].get("_things") else None
+        if items is None:
+            rules = await get_rules(c)
+            items = dr.parse_items(m.text, weight_for=lambda name: rules.item_dims(name)[0])
     except ValueError as ex:
         return await m.answer(f"⚠️ {e(str(ex))}")
     pkgs[idx]["items"] = items
+    pkgs[idx].pop("_things", None)
     total = sum(i["cost"] * i["amount"] for i in items)
     await m.answer(f"✅ Место {idx + 1}: товаров {len(items)} на {dr.fmt_money(total)}")
     if idx + 1 < len(pkgs):

@@ -282,13 +282,24 @@ async def proceed_packages(c: Ctx, pkgs: list[dict], boxes: dict | None = None) 
     if d.get("order_type") == 1:
         await ask_items(c, pkgs, 0)
         return
-    await complete(c, "packages", pkgs)
+    await complete(c, "packages", [{k: v for k, v in p.items() if k != "_things"} for p in pkgs])
 
 
 async def ask_items(c: Ctx, pkgs: list[dict], idx: int) -> None:
     await c.state.set_state(OrderSG.items)
     await c.state.update_data(pkg_tmp=pkgs, pkg_idx=idx)
     p = pkgs[idx]
+    if p.get("_things"):
+        things = "\n".join(f"{n}. {e(t['name'])}" + (f" ×{t['qty']}" if t["qty"] > 1 else "")
+                           + f" ({dr.fmt_kg(t['weight'])} кг/шт)" for n, t in enumerate(p["_things"], 1))
+        example = " ".join(["1490"] * len(p["_things"]))
+        await c.send(
+            f"🧾 <b>Товары в месте {idx + 1} из {len(pkgs)}</b> — взял с прошлого шага:\n{things}\n\n"
+            f"Пришлите <b>цены за 1 шт</b> по порядку, через пробел: <code>{example}</code>\n\n"
+            "<i>Нужны другие названия или артикулы — пришлите товары полным списком:</i>\n"
+            "<code>Название + цена ₽ + [вес кг] + [кол-во] + [артикул]</code>",
+            ikb([NAV]))
+        return
     await c.send(
         f"🧾 <b>Товары в месте {idx + 1} из {len(pkgs)}</b> ({dr.fmt_kg(p['weight'])} кг, "
         f"{p['length']}×{p['width']}×{p['height']} см)\nКаждый товар строкой:\n"

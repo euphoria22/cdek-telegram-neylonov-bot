@@ -155,6 +155,18 @@ def parse_items(text: str, weight_for=None) -> list[dict]:
     return items
 
 
+def parse_prices(text: str, things: list[dict]) -> list[dict] | None:
+    """Только цены по порядку («1490 8990» или по строке на товар) для уже известных вещей.
+    Возвращает товары или None, если это не список цен (тогда текст разбирается как полный формат)."""
+    tokens = re.findall(r"\d+(?:[.,]\d+)?", text)
+    if not tokens or re.sub(r"[\d\s.,₽рруб]", "", text.lower()):
+        return None
+    if len(tokens) != len(things):
+        raise ValueError(f"Нужно {len(things)} цен(ы) — по одной на товар, по порядку, а прислано {len(tokens)}")
+    return [{"name": t["name"][:255], "cost": to_float(p), "weight": t["weight"], "amount": t["qty"],
+             "ware_key": f"ITEM{n}"} for n, (t, p) in enumerate(zip(things, tokens), 1)]
+
+
 def normalize_phone(s: str) -> str:
     digits = re.sub(r"\D", "", s)
     if len(digits) == 11 and digits[0] == "8":

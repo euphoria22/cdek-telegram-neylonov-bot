@@ -142,13 +142,17 @@ def pack(rules: Rules, names: list[tuple[str, int]]) -> list[dict]:
             return
         height = max(rules.min_height, sum(t[3] for t in cur))
         counts: dict[str, int] = {}
+        weights: dict[str, int] = {}
         for t in cur:
             counts[t[4]] = counts.get(t[4], 0) + 1
+            weights[t[4]] = t[0]
         packages.append({
             "weight": sum(t[0] for t in cur),
             "length": max(t[1] for t in cur), "width": max(t[2] for t in cur),
             "height": min(height, max(rules.max_height, max(t[3] for t in cur))),
             "comment": ", ".join(f"{k} ×{v}" if v > 1 else k for k, v in counts.items())[:255],
+            # что лежит в месте — для шага «Товары» (ИМ): останется спросить только цены
+            "_things": [{"name": k, "qty": v, "weight": weights[k]} for k, v in counts.items()],
         })
         cur.clear()
 

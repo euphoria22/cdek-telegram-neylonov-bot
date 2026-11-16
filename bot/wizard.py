@@ -1,5 +1,7 @@
 """Мастер оформления заказа: спрашивает только незаполненные шаги черновика."""
+import asyncio
 import html
+import logging
 import math
 from dataclasses import dataclass
 
@@ -180,14 +182,38 @@ async def ask_items(c: Ctx, pkgs: list[dict], idx: int) -> None:
         ikb([NAV]))
 
 
+async def calc_missing_tariffs(c: Ctx, d: dict, known: set) -> list[dict]:
+    """tarifflist возвращает не все тарифы договора — досчитываем известные коды по одному."""
+    base = dr.build_tarifflist(d)
+    sem = asyncio.Semaphore(6)
+
+    async def one(code: int):
+        async with sem:
+            try:
+                r = await c.cdek.calc_tariff({**base, "tariff_code": code})
+            except CdekError as ex:
+                logging.getLogger(__name__).debug("tariff %s unavailable: %s", code, ex)
+                return None
+        if r.get("delivery_sum") is None:
+            return None
+        name, mode = TARIFFS[code]
+        return {"tariff_code": code, "tariff_name": name, "delivery_mode": mode, "delivery_sum": r["delivery_sum"],
+                "period_min": r.get("period_min"), "period_max": r.get("period_max")}
+
+    res = await asyncio.gather(*(one(code) for code in TARIFFS if code not in known))
+    return [r for r in res if r]
+
+
 async def ask_tariff(c: Ctx, d: dict) -> None:
     await c.state.set_state(OrderSG.tariff)
+    await c.bot.send_chat_action(c.chat_id, "typing")
     try:
         tariffs = await c.cdek.tariff_list(dr.build_tarifflist(d))
     except CdekError as ex:
         await c.send(f"⚠️ Не удалось получить список тарифов: {e(str(ex))}",
                      ikb([[("⌨️ Ввести код тарифа", "tf:manual")], [("🔁 Повторить", "tf:retry")], NAV]))
         return
+    tariffs = list(tariffs) + await calc_missing_tariffs(c, d, {t.get("tariff_code") for t in tariffs})
     # при явной смене тарифа из сводки показываем все; несовместимые пункты потом сбросятся
     any_mode = (await c.state.get_data()).get("tf_any")
     items = []

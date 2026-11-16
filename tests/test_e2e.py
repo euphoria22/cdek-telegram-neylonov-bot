@@ -75,6 +75,11 @@ class FakeCdek:
                  "period_min": 2, "period_max": 3},
             ]})
         if p.endswith("/calculator/tariff"):
+            # 234 нет в tarifflist, но он считается — бот должен его досчитать
+            if body.get("tariff_code") not in (136, 137, 139, 234):
+                return httpx.Response(400, json={"errors": [{"code": "v2_tariff", "message": "Тариф недоступен"}]})
+            if body["tariff_code"] == 234:
+                return httpx.Response(200, json={"delivery_sum": 400, "total_sum": 400, "period_min": 4, "period_max": 6})
             return httpx.Response(200, json={"delivery_sum": 350, "total_sum": 420, "period_min": 2, "period_max": 3,
                                              "services": [{"code": "INSURANCE", "sum": 20}, {"code": "CARTON_BOX_S", "sum": 50}]})
         if p.endswith("/orders") and m == "POST" and "/print/" not in p:
@@ -180,7 +185,7 @@ async def test_full_delivery_order_then_template(h: Harness):
     assert "Грузовые места" in j(s)
     s = await h.text("1.5 30x20x10 Документы")
     tariff_buttons = [b for b in h.buttons(s) if b.startswith("pk:tf:")]
-    assert len(tariff_buttons) == 3
+    assert len(tariff_buttons) == 4               # 3 из tarifflist + досчитанный 234
     # тарифы отсортированы по режиму: 139(1), 137(3), 136(4) → 136 = индекс 2
     s = await h.click("pk:tf:2")
     assert "Выбор пункта" in j(s) and "MSK100" in j(s)

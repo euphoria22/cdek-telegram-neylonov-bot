@@ -29,3 +29,16 @@ def test_pack_stack_like_site():
     assert (p["weight"], p["length"], p["width"], p["height"]) == (700, 35, 25, 10)
     pkgs = pk.pack(R, [("рюкзак", 4)])  # 4×20 = 80 > 60 → два места
     assert [p["height"] for p in pkgs] == [60, 20] and sum(p["weight"] for p in pkgs) == 6000
+
+
+@pytest.mark.parametrize("pkg,code", [
+    (dict(weight=400, length=15, width=10, height=8), "CARTON_BOX_XS"),
+    (dict(weight=270, length=25, width=30, height=5), "CARTON_BOX_M"),
+    (dict(weight=1500, length=10, width=30, height=20), "CARTON_BOX_2KG"),   # поворот: 30×20×10
+    (dict(weight=2500, length=30, width=30, height=44), "CARTON_BOX_20KG"),
+    (dict(weight=40000, length=10, width=10, height=10), None),             # тяжелее 30 кг
+    (dict(weight=1000, length=80, width=10, height=10), None),              # длиннее любой коробки
+])
+def test_recommend_box(pkg, code):
+    b = pk.recommend_box(pkg)
+    assert (b.code if b else None) == code

@@ -134,6 +134,13 @@ class Harness:
     async def text(self, t):
         return await self.feed(message={**self._base(), "text": t})
 
+    async def pkgs(self, t=None, click=None, choice="bx:no"):
+        """Ввод мест (текстом или кнопкой) + ответ на вопрос об упаковке СДЭК."""
+        first = await (self.click(click) if click else self.text(t))
+        if choice in self.buttons(first):
+            return first + await self.click(choice)
+        return first
+
     async def loc(self, lat, lon):
         return await self.feed(message={**self._base(), "location": {"latitude": lat, "longitude": lon}})
 
@@ -185,7 +192,7 @@ async def test_full_delivery_order_then_template(h: Harness):
     assert "pk:tc:0" in h.buttons(s)
     s = await h.click("pk:tc:0")
     assert "Грузовые места" in j(s)
-    s = await h.text("1.5 30x20x10 Документы")
+    s = await h.pkgs("1.5 30x20x10 Документы")
     tariff_buttons = [b for b in h.buttons(s) if b.startswith("pk:tf:")]
     assert len(tariff_buttons) == 4               # 3 из tarifflist + досчитанный 234
     # сортировка по цене: 136 (350) · 234 (400) · 137 (500) · 139 (900)
@@ -244,7 +251,7 @@ async def test_full_delivery_order_then_template(h: Harness):
     s = await h.click("tp:use:1")
     assert "город получения" in j(s)               # тип, город/ПВЗ отправки и тариф не спрашиваются
     await h.text("Моск")
-    s = await h.text("2 40x30x20")
+    s = await h.pkgs("2 40x30x20")
     assert "Выбор пункта" in j(s) and "получения" in j(s)  # тариф из шаблона → сразу ПВЗ получения
     s = await h.click("pk:tp:1")
     s = await h.text("0")
@@ -272,7 +279,7 @@ async def test_im_order_with_items_and_cod(h: Harness):
     await h.click("num:gen")
     await h.text("Моск")
     await h.text("Моск")
-    s = await h.text("1 20x20x20\n0.5 10x10x10")
+    s = await h.pkgs("1 20x20x20\n0.5 10x10x10")
     assert "место 1 из 2" in j(s).lower() or "месте 1 из 2" in j(s).lower()
     s = await h.text("Футболка + 1000 + 0.3 + 2")
     assert "2 из 2" in j(s)
@@ -311,7 +318,7 @@ async def test_im_recipient_pays_delivery_with_markup(h: Harness):
     await h.click("num:gen")
     await h.text("Моск")
     await h.text("Моск")
-    await h.text("1 20x20x20")
+    await h.pkgs("1 20x20x20")
     await h.text("Книга; 800; 0.9")
     await h.click("pk:tf:0")                       # 136 склад-склад
     await h.click("pk:fp:0")
@@ -354,7 +361,7 @@ async def test_quick_request_address_is_pvz(h: Harness):
     await h.click("ot:2")
     s = await h.text("Моск")
     assert "Грузовые места" in j(s)                # город получения взят из запроса
-    s = await h.text("1 20x20x10")
+    s = await h.pkgs("1 20x20x10")
     assert "совпадает с ПВЗ <code>SPB5</code>" in j(s)
     assert len([b for b in h.buttons(s) if b.startswith("pk:tf:")]) == 2  # только тарифы до ПВЗ: 136, 234
     s = await h.click("pk:tf:0")
@@ -380,7 +387,7 @@ async def test_quick_request_courier_address_with_template(h: Harness):
     assert "tp:use:1" in h.buttons(s)
     s = await h.click("tp:use:1")
     assert "Грузовые места" in j(s)                # тип и город отправки — из шаблона, город получения — из запроса
-    s = await h.text("1 20x20x10")
+    s = await h.pkgs("1 20x20x10")
     assert "совпадает" not in j(s) and len([b for b in h.buttons(s) if b.startswith("pk:tf:")]) == 4
     s = await h.click("pk:tf:3")                   # 139 дверь-дверь
     assert "адрес забора" in j(s)
@@ -401,7 +408,7 @@ async def test_quick_request_same_street_pvz_tariff(h: Harness):
     await h.text("Сидоров Сидор\nМосква, ул. Арбат, 3\n+79990000001")
     await h.click("ot:2")
     await h.text("Моск")
-    s = await h.text("1 20x20x10")
+    s = await h.pkgs("1 20x20x10")
     assert "совпадает" not in j(s)                 # дом 3 ≠ ПВЗ в доме 10
     await h.click("pk:tf:0")                       # 136 до ПВЗ
     s = await h.click("pk:fp:0")
@@ -432,7 +439,7 @@ async def test_packages_by_buttons(h: Harness):
     await h.click("pb:a:5")
     s = await h.click("pb:pop")                    # убрали одну футболку
     assert "Футболка" in j(s) and "1.27 кг" in j(s)
-    s = await h.click("pb:ok")
+    s = await h.pkgs(click="pb:ok")
     assert "pk:tf:0" in h.buttons(s)               # дальше — тариф
     data = await h.dp.storage.get_data(key=__import__("aiogram").fsm.storage.base.StorageKey(42, UID, UID))
     assert data["draft"]["packages"] == [{"weight": 1270, "length": 55, "width": 41, "height": 20,
@@ -442,7 +449,7 @@ async def test_packages_by_buttons(h: Harness):
 async def test_packages_by_names_and_im_item_weight_from_rules(h: Harness):
     j = h.joined
     await _to_packages_step(h, "ot:1")
-    s = await h.text("пуховик, футболка 2")
+    s = await h.pkgs("пуховик, футболка 2")
     assert "Мест: 1, общий вес 1.54 кг" in j(s) and "55×41×25" in j(s)
     assert "Товары в месте 1 из 1" in j(s)
     s = await h.text("Пуховик Arctic + 8990\nФутболка белая + 1490 + + 2")
@@ -460,8 +467,43 @@ async def test_rules_edit(h: Harness):
     assert "Сохранено правил: 1" in j(s)
     s = await _to_packages_step(h)
     assert "pb:a:0" in h.buttons(s) and "pb:a:1" not in h.buttons(s)
-    s = await h.text("ваза, книга")
+    s = await h.pkgs("ваза, книга")
     assert "2.5 кг" in j(s) and "30×30×44" in j(s)
     s = await h.text("/rules")
     await h.click("rl:reset")
     assert len((await h.db.get_setting(UID, "pack_rules")) or "") == 0
+
+
+async def test_cdek_box_recommendation(h: Harness):
+    j = h.joined
+    await _to_packages_step(h)
+    s = await h.click("pb:a:5")                    # футболка 25×30×5
+    assert "Подойдёт упаковка СДЭК" in j(s) and "Коробка M 33×25×15" in j(s)   # подсказка во время заполнения
+    s = await h.click("pb:ok")
+    assert "bx:yes" in h.buttons(s) and "Коробка M" in j(s)
+    s = await h.click("bx:yes")
+    assert "pk:tf:0" in h.buttons(s)
+    await h.click("pk:tf:0")
+    await h.click("pk:fp:0")
+    await h.click("pk:tp:0")
+    s = await h.text("0")
+    assert "Уже добавлены коробки СДЭК: Коробка M 33×25×15 × 1" in j(s)
+    await h.click("sv:ok")
+    await h.text("Петров Пётр\n+79991112233")
+    await h.text("Иванов\n+79990000000")
+    await h.click("cm:skip")
+    await h.click("sm:create")
+    o = h.fake.orders[-1]
+    assert o["packages"][0] | {} == {**o["packages"][0], "length": 33, "width": 25, "height": 15, "weight": 270}
+    assert {"code": "CARTON_BOX_M", "parameter": "1"} in o["services"]
+
+
+async def test_cdek_boxes_added_when_services_in_template(h: Harness):
+    await h.db.save_template(UID, "T", {"order_type": 2, "services": {"SMS": True}})
+    await h.text("📦 Новый заказ")
+    await h.click("tp:use:1")
+    await h.text("Моск")
+    await h.text("Моск")
+    await h.pkgs("0.4 15x10x8\n0.4 15x10x8", choice="bx:yes")
+    data = await h.dp.storage.get_data(key=__import__("aiogram").fsm.storage.base.StorageKey(42, UID, UID))
+    assert data["draft"]["services"] == {"SMS": True, "CARTON_BOX_XS": 2}

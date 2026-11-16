@@ -218,7 +218,7 @@ def services_list(d: dict, for_calc: bool = False) -> list[dict]:
     res = []
     for code, val in (d.get("services") or {}).items():
         item = {"code": code}
-        if val not in (None, True):
+        if val is not None and val is not True:
             item["parameter"] = str(val)
         res.append(item)
     dv = declared_total(d)
@@ -338,7 +338,7 @@ def services_str(services: dict | None) -> str:
     out = []
     for code, val in services.items():
         title = SERVICES_BY_CODE[code].title if code in SERVICES_BY_CODE else code
-        out.append(title if val in (None, True) else f"{title} × {val}")
+        out.append(title if val is None or val is True else f"{title} × {val}")
     return ", ".join(out)
 
 

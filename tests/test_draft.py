@@ -92,3 +92,9 @@ def test_parse_quick_request():
 ])
 def test_split_address(addr, city, rest):
     assert dr.split_address(addr) == (city, rest)
+
+
+def test_service_quantity_one_is_not_flag():
+    d = {"order_type": 2, "services": {"CARTON_BOX_M": 1, "SMS": True}}
+    assert dr.services_list(d) == [{"code": "CARTON_BOX_M", "parameter": "1"}, {"code": "SMS"}]
+    assert dr.services_str(d["services"]) == "Коробка M 33×25×15 × 1, SMS-уведомление получателю"

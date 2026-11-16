@@ -14,7 +14,8 @@ from ..catalog import TARIFFS
 from ..cdek import CdekClient, CdekError
 from ..config import Config
 from ..db import Database
-from ..wizard import (OrderSG, ask_cod_delivery, ask_items, finish_packages, get_rules, render_packages, point_from_item, search_city, ask_tariff, complete, edit_block, go_back, ikb, main_menu, make_ctx,
+from ..wizard import (OrderSG, apply_cdek_boxes, ask_cod_delivery, ask_items, finish_packages, get_rules, packages_str,
+                      proceed_packages, render_packages, point_from_item, search_city, ask_tariff, complete, edit_block, go_back, ikb, main_menu, make_ctx,
                       render_list, render_services, send_list, show_summary)
 
 router = Router(name="order")
@@ -113,6 +114,22 @@ async def msg_packages(m: Message, state: FSMContext, cdek: CdekClient, db: Data
         except ValueError as ex:
             return await m.answer(f"⚠️ {e(str(ex))}. Пример: <code>пуховик, футболка 2</code> или <code>1.5 30x20x10</code>")
     await finish_packages(c, pkgs)
+
+
+@router.callback_query(OrderSG.box_choice, F.data.startswith("bx:"))
+async def cb_box_choice(cb: CallbackQuery, state: FSMContext, cdek: CdekClient, db: Database, config: Config):
+    c = make_ctx(cb, state, cdek, db, config)
+    pkgs = (await state.get_data()).get("pkg_pending")
+    if not pkgs:
+        return await cb.answer("Устарело, введите места заново", show_alert=True)
+    await cb.answer()
+    await cb.message.edit_reply_markup(reply_markup=None)
+    if cb.data == "bx:yes":
+        pkgs, boxes = apply_cdek_boxes(pkgs)
+        await cb.message.answer("📦 Упаковка СДЭК: " + dr.services_str(boxes) + "\n" + packages_str(pkgs))
+        return await proceed_packages(c, pkgs, boxes)
+    await cb.message.answer("📦 Своя упаковка")
+    await proceed_packages(c, pkgs)
 
 
 @router.callback_query(OrderSG.packages, F.data.startswith("pb:"))
@@ -472,6 +489,7 @@ async def cb_noop(cb: CallbackQuery):
 
 # Неожиданный ввод на шагах с кнопками
 @router.message(OrderSG.order_type)
+@router.message(OrderSG.box_choice)
 @router.message(OrderSG.cod)
 @router.message(OrderSG.services)
 @router.message(OrderSG.tariff)

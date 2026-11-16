@@ -28,6 +28,7 @@ class OrderSG(StatesGroup):
     from_city = State()
     to_city = State()
     packages = State()
+    box_choice = State()
     items = State()
     tariff = State()
     tariff_code = State()
@@ -208,7 +209,7 @@ def render_packages(d: dict, rules: "packing.Rules", basket: list) -> tuple[str,
     if basket:
         pkgs = packing.pack(rules, [tuple(x) for x in basket])
         text += "\n\n🧺 <b>Уже в коробке:</b> " + ", ".join(
-            f"{e(n)} ×{q}" if q > 1 else e(n) for n, q in basket) + "\n" + packages_str(pkgs)
+            f"{e(n)} ×{q}" if q > 1 else e(n) for n, q in basket) + "\n" + packages_str(pkgs) + "\n" + boxes_hint(pkgs)
     rows, row = [], []
     for i, r in enumerate(rules.rules):
         cnt = sum(q for n, q in basket if n == r.label.split("/")[0])
@@ -230,9 +231,54 @@ async def ask_packages(c: Ctx, d: dict) -> None:
     await c.send(text + "\n\n<i>Правила веса и размеров по названию: /rules</i>", markup)
 
 
+def boxes_hint(pkgs: list[dict]) -> str:
+    lines = []
+    for n, p in enumerate(pkgs, 1):
+        b = packing.recommend_box(p)
+        lines.append(f"{n}. {packing.box_str(b)}" if b else f"{n}. нет подходящей коробки СДЭК — своя упаковка")
+    return "📦 <b>Подойдёт упаковка СДЭК:</b>\n" + "\n".join(lines)
+
+
 async def finish_packages(c: Ctx, pkgs: list[dict]) -> None:
-    await c.send("✅ " + packages_str(pkgs))
+    """Места посчитаны: показываем рекомендацию упаковки СДЭК и спрашиваем, упаковывать ли в неё."""
+    if not any(packing.recommend_box(p) for p in pkgs):
+        await c.send("✅ " + packages_str(pkgs) + "\n<i>Коробки СДЭК под эти размеры/вес нет — нужна своя упаковка.</i>")
+        await proceed_packages(c, pkgs)
+        return
+    await c.state.set_state(OrderSG.box_choice)
+    await c.state.update_data(pkg_pending=pkgs)
+    await c.send("✅ " + packages_str(pkgs) + "\n\n" + boxes_hint(pkgs) + "\n\n"
+                 "<i>Если упаковать в СДЭК, размеры мест станут размерами коробок (так считается цена), "
+                 "а коробки добавятся в доп. услуги.</i>",
+                 ikb([[("📦 Упаковать в коробки СДЭК", "bx:yes")], [("Своя упаковка", "bx:no")], NAV]))
+
+
+def apply_cdek_boxes(pkgs: list[dict]) -> tuple[list[dict], dict]:
+    out, counts = [], {}
+    for p in pkgs:
+        b = packing.recommend_box(p)
+        if b:
+            p = {**p, "length": b.length, "width": b.width, "height": b.height}
+            counts[b.code] = counts.get(b.code, 0) + 1
+        out.append(p)
+    return out, counts
+
+
+async def proceed_packages(c: Ctx, pkgs: list[dict], boxes: dict | None = None) -> None:
     d = await c.draft()
+    if boxes:
+        if "services" in d:  # услуги уже заданы (шаблон) — докладываем коробки сразу
+            svc = dict(d["services"])
+            for code, n in boxes.items():
+                svc[code] = svc.get(code, 0) + n
+            d["services"] = svc
+            d.pop("_box_rec", None)
+        else:
+            d["_box_rec"] = boxes  # предзаполним шаг доп. услуг
+        await c.save(d)
+    else:
+        d.pop("_box_rec", None)
+        await c.save(d)
     if d.get("order_type") == 1:
         await ask_items(c, pkgs, 0)
         return
@@ -454,8 +500,13 @@ def render_services(tmp: dict, order_type: int, page: str) -> tuple[str, InlineK
 async def ask_services(c: Ctx, d: dict) -> None:
     await c.state.set_state(OrderSG.services)
     tmp = dict(d.get("services") or {})
+    rec = d.get("_box_rec") or {}
+    for code, n in rec.items():
+        tmp[code] = tmp.get(code, 0) + n
     await c.state.update_data(svc_tmp=tmp, svc_page="main")
     text, markup = render_services(tmp, d["order_type"], "main")
+    if rec:
+        text += "\n\n📦 Уже добавлены коробки СДЭК: " + dr.services_str(rec) + " (раздел «Упаковка»)."
     await c.send(text, markup)
 
 
@@ -517,6 +568,8 @@ async def complete(c: Ctx, key: str, value) -> None:
     data = await c.state.get_data()
     d = dict(data.get("draft") or {})
     d[key] = value
+    if key == "services":
+        d.pop("_box_rec", None)
     hist = [k for k in data.get("hist", []) if k != key] + [key]
     # служебные списки больше не нужны — не держим их в хранилище
     cleanup = {k: None for k in data if k.startswith(("L_", "T_", "pvz_")) or k in ("pkg_tmp", "svc_tmp")}
@@ -573,5 +626,5 @@ async def show_summary(c: Ctx) -> None:
 
 
 __all__ = ["OrderSG", "Ctx", "make_ctx", "ikb", "NAV", "main_menu", "render_list", "send_list", "render_services",
-           "start_order", "advance", "ask_cod_delivery", "get_rules", "render_packages", "finish_packages", "search_city", "point_from_item", "complete", "go_back", "edit_block", "show_summary", "ask_items", "ask_tariff",
+           "start_order", "advance", "ask_cod_delivery", "get_rules", "render_packages", "finish_packages", "proceed_packages", "apply_cdek_boxes", "packages_str", "search_city", "point_from_item", "complete", "go_back", "edit_block", "show_summary", "ask_items", "ask_tariff",
            "TARIFFS"]

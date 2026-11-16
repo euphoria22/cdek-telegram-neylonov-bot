@@ -9,6 +9,8 @@
 import re
 from dataclasses import dataclass, field
 
+from .catalog import BOXES, Box
+
 DEFAULT_RULES_TEXT = """\
 Пуховик: пуховик, парка, пальто, дублёнк, дубленк = 1000 55x41x15
 Куртка: куртк, бомбер, ветровк, жилет, анорак = 700 37x35x10
@@ -156,3 +158,15 @@ def pack(rules: Rules, names: list[tuple[str, int]]) -> list[dict]:
         cur.append(t)
     flush()
     return packages
+
+
+def recommend_box(pkg: dict) -> Box | None:
+    """Самая маленькая коробка СДЭК, куда влезает место (с поворотом) по размерам и весу."""
+    need = sorted((pkg["length"], pkg["width"], pkg["height"]), reverse=True)
+    fits = [b for b in BOXES if pkg["weight"] <= b.max_weight
+            and all(n <= h for n, h in zip(need, sorted((b.length, b.width, b.height), reverse=True)))]
+    return min(fits, key=lambda b: (b.length * b.width * b.height, b.max_weight)) if fits else None
+
+
+def box_str(b: Box) -> str:
+    return f"{b.title} {b.length}×{b.width}×{b.height} см, до {b.max_weight / 1000:g} кг"

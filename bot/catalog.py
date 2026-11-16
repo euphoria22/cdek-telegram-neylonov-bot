@@ -83,10 +83,10 @@ SERVICES: list[Service] = [
     Service("GET_UP_FLOOR_BY_ELEVATOR", "Подъём на этаж лифтом", "flag", "main"),
     Service("GET_UP_FLOOR_BY_HAND", "Подъём вручную, этажей", "count", "main"),
     # --- Упаковка ---
-    Service("CARTON_BOX_XS", "Коробка XS (до 0,5 кг)", "count", "pack"),
-    Service("CARTON_BOX_S", "Коробка S (до 2 кг)", "count", "pack"),
-    Service("CARTON_BOX_M", "Коробка M (до 5 кг)", "count", "pack"),
-    Service("CARTON_BOX_L", "Коробка L (до 12 кг)", "count", "pack"),
+    Service("CARTON_BOX_XS", "Коробка XS", "count", "pack"),
+    Service("CARTON_BOX_S", "Коробка S", "count", "pack"),
+    Service("CARTON_BOX_M", "Коробка M", "count", "pack"),
+    Service("CARTON_BOX_L", "Коробка L", "count", "pack"),
     Service("CARTON_BOX_500GR", "Коробка 500 г", "count", "pack"),
     Service("CARTON_BOX_1KG", "Коробка 1 кг", "count", "pack"),
     Service("CARTON_BOX_2KG", "Коробка 2 кг", "count", "pack"),
@@ -123,3 +123,38 @@ TEMPLATE_BLOCKS: list[tuple[str, str]] = [
     ("comment", "Комментарий"),
 ]
 TEMPLATE_DEFAULT = {"order_type", "from_city", "from_point", "tariff", "services", "sender"}
+
+
+@dataclass(frozen=True)
+class Box:
+    code: str      # код доп. услуги СДЭК
+    title: str
+    length: int    # см
+    width: int
+    height: int
+    max_weight: int  # г
+
+
+# Фирменные коробки СДЭК для рекомендации. Размеры — из документации API (XS) и руководства СДЭК
+# по упаковке 2021 г. / сайтов СДЭК; перед массовым использованием сверьте с актуальными в вашем ПВЗ.
+# Коробки 500 г и 15 кг не рекомендуются: их размеры не удалось подтвердить (заказать вручную можно).
+BOXES: list[Box] = [
+    Box("CARTON_BOX_XS", "Коробка XS", 17, 12, 9, 500),
+    Box("CARTON_BOX_1KG", "Коробка 1 кг", 24, 17, 10, 1000),
+    Box("CARTON_BOX_S", "Коробка S", 23, 19, 10, 2000),
+    Box("CARTON_BOX_2KG", "Коробка 2 кг", 34, 24, 10, 2000),
+    Box("CARTON_BOX_3KG", "Коробка 3 кг", 24, 24, 21, 3000),
+    Box("CARTON_BOX_M", "Коробка M", 33, 25, 15, 5000),
+    Box("CARTON_BOX_5KG", "Коробка 5 кг", 40, 24, 21, 5000),
+    Box("CARTON_BOX_L", "Коробка L", 31, 25, 38, 12000),
+    Box("CARTON_BOX_10KG", "Коробка 10 кг", 40, 35, 28, 10000),
+    Box("CARTON_BOX_20KG", "Коробка 20 кг", 47, 40, 43, 20000),
+    Box("CARTON_BOX_30KG", "Коробка 30 кг", 69, 39, 42, 30000),
+]
+BOXES_BY_CODE = {b.code: b for b in BOXES}
+
+# в названиях услуг-коробок показываем размеры
+SERVICES[:] = [Service(x.code, f"{x.title} {BOXES_BY_CODE[x.code].length}×{BOXES_BY_CODE[x.code].width}×"
+                       f"{BOXES_BY_CODE[x.code].height}", x.kind, x.group, x.only)
+               if x.code in BOXES_BY_CODE else x for x in SERVICES]
+SERVICES_BY_CODE.update({x.code: x for x in SERVICES})

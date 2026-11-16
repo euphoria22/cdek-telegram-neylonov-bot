@@ -1,0 +1,20 @@
+# systemd-юнит. Установка:
+#   sudo cp deploy/cdek-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now cdek-bot
+#   journalctl -u cdek-bot -f      # логи
+[Unit]
+Description=CDEK Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cdekbot
+WorkingDirectory=/opt/cdek-bot
+EnvironmentFile=/opt/cdek-bot/.env
+ExecStart=/opt/cdek-bot/.venv/bin/python -m bot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

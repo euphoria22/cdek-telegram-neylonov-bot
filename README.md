@@ -49,6 +49,37 @@ python -m bot
 - `SHARED_TEMPLATES=1` — общие шаблоны для всей команды.
 - `REDIS_URL` — хранить состояние диалогов в Redis (иначе в памяти, и при перезапуске незаконченные черновики теряются).
 
+## Развёртывание на сервере
+
+Бот работает в режиме long polling: он сам ходит в Telegram, поэтому ему **не нужны** домен, HTTPS и открытые
+порты. Нужен сервер, где можно держать постоянно запущенный процесс (VPS или VDS). Обычный виртуальный хостинг
+сайта (PHP + FTP) не подойдёт. Бот можно запустить на том же VPS, где работает сайт, с ним он никак не пересекается.
+
+**Вариант 1. Docker** (проще всего):
+
+```bash
+git clone <URL репозитория> /opt/cdek-bot && cd /opt/cdek-bot
+cp .env.example .env && nano .env      # BOT_TOKEN, ключи СДЭК, CDEK_TEST=0, ALLOWED_USERS
+docker compose up -d --build
+docker compose logs -f                 # логи
+```
+
+**Вариант 2. systemd** (нужен Python 3.11+):
+
+```bash
+sudo useradd -r -m -d /opt/cdek-bot cdekbot
+sudo -u cdekbot git clone <URL репозитория> /opt/cdek-bot
+cd /opt/cdek-bot
+sudo -u cdekbot python3 -m venv .venv
+sudo -u cdekbot .venv/bin/pip install -r requirements.txt
+sudo -u cdekbot cp .env.example .env && sudo -u cdekbot nano .env
+sudo cp deploy/cdek-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now cdek-bot
+```
+
+Обновление: `git pull`, затем `docker compose up -d --build` или `sudo systemctl restart cdek-bot`.
+Шаблоны и история хранятся в SQLite (`data/` или `DB_PATH`), их стоит включить в бэкап.
+
 ## Тесты
 
 ```bash

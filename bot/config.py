@@ -18,6 +18,8 @@ class Config:
     shared_templates: bool
     db_path: str
     redis_url: str | None
+    telegram_api_url: str | None = None
+    telegram_proxy: str | None = None
 
 
 def load_config() -> Config:
@@ -42,4 +44,6 @@ def load_config() -> Config:
         shared_templates=os.getenv("SHARED_TEMPLATES", "0") == "1",
         db_path=os.getenv("DB_PATH", "cdek_bot.sqlite3"),
         redis_url=os.getenv("REDIS_URL") or None,
+        telegram_api_url=(os.getenv("TELEGRAM_API_URL") or "").strip().rstrip("/") or None,
+        telegram_proxy=(os.getenv("TELEGRAM_PROXY") or "").strip() or None,
     )

@@ -77,6 +77,20 @@ sudo cp deploy/cdek-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now cdek-bot
 ```
 
+### Если Telegram недоступен с сервера
+
+Признаки: бот не отвечает, а `curl https://api.telegram.org` с сервера зависает.
+
+**Через Cloudflare Worker** (бесплатно):
+1. Откройте dash.cloudflare.com → **Workers & Pages** → **Create** → **Create Worker**, задайте имя (например `tg-proxy`) → **Deploy**.
+2. **Edit code**: вставьте содержимое `deploy/cloudflare-worker.js` и в `ALLOWED_BOT_ID` впишите ID бота (число до `:` в токене). → **Deploy**.
+3. В `.env` бота: `TELEGRAM_API_URL=https://tg-proxy.<ваш-аккаунт>.workers.dev`, затем `docker compose up -d`.
+
+Проверка с сервера (должно вернуть `"ok":true`):
+`curl https://tg-proxy.<ваш-аккаунт>.workers.dev/bot<ТОКЕН>/getMe`
+
+**Через прокси**: `TELEGRAM_PROXY=socks5://user:pass@host:1080` (или `http://...`).
+
 Обновление: `git pull`, затем `docker compose up -d --build` или `sudo systemctl restart cdek-bot`.
 Шаблоны и история хранятся в SQLite (`data/` или `DB_PATH`), их стоит включить в бэкап.
 

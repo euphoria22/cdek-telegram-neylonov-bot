@@ -53,6 +53,22 @@ async def on_error(event: ErrorEvent, bot: Bot):
     return True
 
 
+def make_session(cfg):
+    """Обход блокировки Telegram: свой адрес Bot API (Cloudflare Worker) и/или прокси."""
+    if not cfg.telegram_api_url and not cfg.telegram_proxy:
+        return None
+    from aiogram.client.session.aiohttp import AiohttpSession
+    from aiogram.client.telegram import TelegramAPIServer
+    kw = {}
+    if cfg.telegram_api_url:
+        kw["api"] = TelegramAPIServer.from_base(cfg.telegram_api_url)
+        log.info("Telegram API через %s", cfg.telegram_api_url)
+    if cfg.telegram_proxy:
+        kw["proxy"] = cfg.telegram_proxy
+        log.info("Telegram через прокси %s", cfg.telegram_proxy.split("@")[-1])
+    return AiohttpSession(**kw)
+
+
 def build_dispatcher(storage, cdek: CdekClient, db: Database, cfg) -> Dispatcher:
     dp = Dispatcher(storage=storage)
     dp["cdek"], dp["db"], dp["config"] = cdek, db, cfg
@@ -77,7 +93,7 @@ async def main() -> None:
     else:
         storage = MemoryStorage()
 
-    bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = Bot(cfg.bot_token, session=make_session(cfg), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     cdek = CdekClient(cfg.cdek_base_url, cfg.cdek_client_id, cfg.cdek_client_secret)
     db = Database(cfg.db_path)
     await db.init()

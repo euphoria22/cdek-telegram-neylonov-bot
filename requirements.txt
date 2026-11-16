@@ -2,5 +2,6 @@ aiogram>=3.13,<4
 httpx>=0.27
 aiosqlite>=0.20
 python-dotenv>=1.0
+aiohttp-socks>=0.8   # для TELEGRAM_PROXY (socks5/http)
 # опционально, если FSM нужно хранить в Redis (REDIS_URL):
 # redis>=5.0

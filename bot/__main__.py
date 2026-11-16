@@ -65,7 +65,9 @@ def build_dispatcher(storage, cdek: CdekClient, db: Database, cfg) -> Dispatcher
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    log.info("Запуск бота…")
     cfg = load_config()
+    log.info("CDEK API: %s, разрешённых пользователей: %s", cfg.cdek_base_url, len(cfg.allowed_users) or "все")
     if not cfg.allowed_users:
         log.warning("ALLOWED_USERS пуст — ботом может пользоваться любой, кто его найдёт!")
 
@@ -82,6 +84,8 @@ async def main() -> None:
 
     dp = build_dispatcher(storage, cdek, db, cfg)
 
+    me = await bot.get_me()
+    log.info("Подключились к Telegram как @%s", me.username)
     await bot.set_my_commands([
         BotCommand(command="new", description="Новый заказ"),
         BotCommand(command="templates", description="Шаблоны"),
@@ -90,7 +94,7 @@ async def main() -> None:
         BotCommand(command="savetpl", description="Сохранить текущие данные как шаблон"),
         BotCommand(command="cancel", description="Отменить"),
     ])
-    log.info("CDEK API: %s", cfg.cdek_base_url)
+    log.info("Бот работает, жду сообщений")
     try:
         await dp.start_polling(bot)
     finally:

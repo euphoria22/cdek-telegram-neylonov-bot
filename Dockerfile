@@ -3,6 +3,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY bot ./bot
-ENV DB_PATH=/data/cdek_bot.sqlite3
+ENV DB_PATH=/data/cdek_bot.sqlite3 \
+    PYTHONUNBUFFERED=1
 VOLUME ["/data"]
 CMD ["python", "-m", "bot"]

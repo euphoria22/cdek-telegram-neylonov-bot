@@ -186,8 +186,9 @@ async def test_full_delivery_order_then_template(h: Harness):
     s = await h.text("1.5 30x20x10 Документы")
     tariff_buttons = [b for b in h.buttons(s) if b.startswith("pk:tf:")]
     assert len(tariff_buttons) == 4               # 3 из tarifflist + досчитанный 234
-    # тарифы отсортированы по режиму: 139(1), 137(3), 136(4) → 136 = индекс 2
-    s = await h.click("pk:tf:2")
+    # сортировка по цене: 136 (350) · 234 (400) · 137 (500) · 139 (900)
+    assert tariff_buttons[0] == "pk:tf:0"
+    s = await h.click("pk:tf:0")
     assert "Выбор пункта" in j(s) and "MSK100" in j(s)
     s = await h.text("арбат")                      # поиск по адресу
     assert "MSK200" in j(s) and "MSK100" not in j(s)
@@ -254,8 +255,8 @@ async def test_full_delivery_order_then_template(h: Harness):
 
     # --- редактирование из сводки и «назад»
     s = await h.click("ed:tf")
-    assert "pk:tf:0" in h.buttons(s)
-    s = await h.click("pk:tf:0")                   # дверь-дверь → пункты сбрасываются, просит адреса
+    assert "pk:tf:3" in h.buttons(s)
+    s = await h.click("pk:tf:3")                   # 139 дверь-дверь → пункты сбрасываются, просит адреса
     assert "адрес забора" in j(s)
     s = await h.click("wz:back")                   # отменяет выбор тарифа
     assert "pk:tf:0" in h.buttons(s)
@@ -274,7 +275,7 @@ async def test_im_order_with_items_and_cod(h: Harness):
     s = await h.text("Футболка; 1000; 0.3; 2")
     assert "2 из 2" in j(s)
     s = await h.text("Кепка; 500; 0.2")
-    s = await h.click("pk:tf:1")                   # 137 склад-дверь
+    s = await h.click("pk:tf:2")                   # 137 склад-дверь
     await h.click("pk:fp:0")
     s = await h.text("ул. Ленина, 1, кв. 5")
     assert "Что оплачивает получатель" in j(s) and "2 500" in j(s)
@@ -310,7 +311,7 @@ async def test_im_recipient_pays_delivery_with_markup(h: Harness):
     await h.text("Моск")
     await h.text("1 20x20x20")
     await h.text("Книга; 800; 0.9")
-    await h.click("pk:tf:2")                       # 136 склад-склад
+    await h.click("pk:tf:0")                       # 136 склад-склад
     await h.click("pk:fp:0")
     s = await h.click("pk:tp:1")
     assert "cod:delivery" in h.buttons(s)

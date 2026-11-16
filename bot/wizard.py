@@ -226,9 +226,9 @@ async def ask_tariff(c: Ctx, d: dict) -> None:
         items.append({
             "code": t["tariff_code"], "name": t.get("tariff_name") or str(t["tariff_code"]), "mode": mode,
             "label": f"{SIDE_EMOJI[fs]}→{SIDE_EMOJI[ts]} {dr.fmt_money(t.get('delivery_sum'))} · {days} · {t.get('tariff_name')}",
-            "sum": t.get("delivery_sum") or 0,
+            "sum": t.get("delivery_sum") or 0, "days": t.get("period_max") or 99,
         })
-    items.sort(key=lambda x: (x["mode"], x["sum"]))
+    items.sort(key=lambda x: (x["sum"], x["days"]))  # сначала самые дешёвые, при равной цене — самые быстрые
     if not items:
         await c.send("😕 Нет доступных тарифов для этого направления и мест.",
                      ikb([[("⌨️ Ввести код тарифа", "tf:manual")], NAV]))

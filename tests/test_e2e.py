@@ -1,0 +1,332 @@
+"""Сквозной прогон бота: настоящий Dispatcher и хэндлеры, фейковый Telegram и мок API СДЭК."""
+import itertools
+import json
+
+import httpx
+import pytest
+from aiogram import Bot
+from aiogram.client.session.base import BaseSession
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import Message, Update
+
+from bot.__main__ import build_dispatcher
+from bot.cdek import CdekClient
+from bot.config import Config
+from bot.db import Database
+
+UID = 777
+
+
+class FakeSession(BaseSession):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+        self.ids = itertools.count(1000)
+
+    async def make_request(self, bot, method, timeout=None):
+        self.calls.append(method)
+        name = type(method).__name__
+        if name in ("SendMessage", "SendDocument", "EditMessageText", "EditMessageReplyMarkup"):
+            return Message.model_validate({
+                "message_id": next(self.ids), "date": 0, "chat": {"id": UID, "type": "private"},
+                "text": getattr(method, "text", None) or "x"}, context={"bot": bot})
+        return True
+
+    async def close(self):
+        pass
+
+    async def stream_content(self, *a, **kw):
+        raise NotImplementedError
+
+
+POINTS = [
+    {"code": "MSK100", "name": "На Тверской", "type": "PVZ", "work_time": "Пн-Вс 10-21",
+     "location": {"address": "ул. Тверская, 7", "latitude": 55.757, "longitude": 37.613}},
+    {"code": "MSK200", "name": "На Арбате", "type": "PVZ", "work_time": "Пн-Вс 9-20",
+     "location": {"address": "ул. Арбат, 10", "latitude": 55.75, "longitude": 37.59}},
+]
+
+
+class FakeCdek:
+    def __init__(self):
+        self.orders = []
+        self.intakes = []
+
+    def __call__(self, req: httpx.Request) -> httpx.Response:
+        p, m = req.url.path, req.method
+        body = json.loads(req.content) if req.content and m in ("POST",) and "oauth" not in p else None
+        if p.endswith("/oauth/token"):
+            return httpx.Response(200, json={"access_token": "T", "expires_in": 3600})
+        if p.endswith("/location/suggest/cities"):
+            name = req.url.params["name"]
+            if name.startswith("Моск"):
+                return httpx.Response(200, json=[{"code": 44, "full_name": "Москва, Россия"}])
+            return httpx.Response(200, json=[{"code": 137, "full_name": "Санкт-Петербург, Россия"},
+                                             {"code": 999, "full_name": "Санкт-Пётр, Где-то"}])
+        if p.endswith("/deliverypoints"):
+            return httpx.Response(200, json=POINTS)
+        if p.endswith("/calculator/tarifflist"):
+            return httpx.Response(200, json={"tariff_codes": [
+                {"tariff_code": 139, "tariff_name": "Посылка дверь-дверь", "delivery_mode": 1, "delivery_sum": 900,
+                 "period_min": 1, "period_max": 2},
+                {"tariff_code": 136, "tariff_name": "Посылка склад-склад", "delivery_mode": 4, "delivery_sum": 350,
+                 "period_min": 2, "period_max": 3},
+                {"tariff_code": 137, "tariff_name": "Посылка склад-дверь", "delivery_mode": 3, "delivery_sum": 500,
+                 "period_min": 2, "period_max": 3},
+            ]})
+        if p.endswith("/calculator/tariff"):
+            return httpx.Response(200, json={"delivery_sum": 350, "total_sum": 420, "period_min": 2, "period_max": 3,
+                                             "services": [{"code": "INSURANCE", "sum": 20}, {"code": "CARTON_BOX_S", "sum": 50}]})
+        if p.endswith("/orders") and m == "POST" and "/print/" not in p:
+            self.orders.append(body)
+            return httpx.Response(202, json={"entity": {"uuid": f"uuid-{len(self.orders)}"},
+                                             "requests": [{"type": "CREATE", "state": "ACCEPTED"}]})
+        if "/orders/uuid-" in p and m == "GET":
+            return httpx.Response(200, json={"entity": {"uuid": p.rsplit("/", 1)[1], "cdek_number": "1234567890",
+                                                        "statuses": [{"code": "CREATED", "name": "Создан",
+                                                                      "date_time": "2026-11-16T10:00:00+0000"}]},
+                                             "requests": [{"type": "CREATE", "state": "SUCCESSFUL"}]})
+        if p.endswith("/print/orders") and m == "POST":
+            return httpx.Response(202, json={"entity": {"uuid": "P1"}})
+        if p.endswith("/print/orders/P1"):
+            return httpx.Response(200, json={"entity": {"uuid": "P1", "url": "https://api.edu.cdek.ru/v2/print/orders/P1.pdf",
+                                                        "statuses": [{"code": "READY"}]}})
+        if p.endswith("P1.pdf"):
+            return httpx.Response(200, content=b"%PDF-1.4 fake", headers={"content-type": "application/pdf"})
+        if p.endswith("/intakes"):
+            self.intakes.append(body)
+            return httpx.Response(202, json={"entity": {"uuid": "INTAKE1"}, "requests": [{"state": "ACCEPTED"}]})
+        return httpx.Response(404, json={"errors": [{"code": "nf", "message": f"no mock for {m} {p}"}]})
+
+
+class Harness:
+    def __init__(self, tmp_path, monkeypatch):
+        import asyncio as _a
+        orig_sleep = _a.sleep
+        monkeypatch.setattr("bot.cdek.asyncio.sleep", lambda s: orig_sleep(0))
+        self.session = FakeSession()
+        self.bot = Bot("42:TEST", session=self.session)
+        self.fake = FakeCdek()
+        self.cdek = CdekClient("https://api.edu.cdek.ru/v2", "id", "secret", transport=httpx.MockTransport(self.fake))
+        self.db = Database(str(tmp_path / "t.sqlite3"))
+        cfg = Config("x", "id", "s", "", set(), False, "", None)
+        self.dp = build_dispatcher(MemoryStorage(), self.cdek, self.db, cfg)
+        self.uid = itertools.count(1)
+        self.mark = 0
+
+    def _base(self):
+        return {"message_id": 1, "date": 0, "chat": {"id": UID, "type": "private"},
+                "from": {"id": UID, "is_bot": False, "first_name": "U"}}
+
+    async def feed(self, **payload):
+        upd = Update.model_validate({"update_id": next(self.uid), **payload}, context={"bot": self.bot})
+        self.mark = len(self.session.calls)
+        await self.dp.feed_update(self.bot, upd)
+        return self.sent()
+
+    async def text(self, t):
+        return await self.feed(message={**self._base(), "text": t})
+
+    async def loc(self, lat, lon):
+        return await self.feed(message={**self._base(), "location": {"latitude": lat, "longitude": lon}})
+
+    async def click(self, data):
+        return await self.feed(callback_query={"id": "c", "from": self._base()["from"], "chat_instance": "ci",
+                                               "data": data, "message": {**self._base(), "text": "old"}})
+
+    def sent(self):
+        """Тексты и кнопки, отправленные ботом за последний апдейт."""
+        out = []
+        for m in self.session.calls[self.mark:]:
+            text = getattr(m, "text", None) or ""
+            kb = getattr(m, "reply_markup", None)
+            buttons = [b.callback_data for row in getattr(kb, "inline_keyboard", []) or [] for b in row]
+            out.append((type(m).__name__, text, buttons))
+        return out
+
+    @staticmethod
+    def joined(sent):
+        return "\n".join(t for _, t, _ in sent)
+
+    @staticmethod
+    def buttons(sent):
+        return [b for _, _, bs in sent for b in bs]
+
+
+@pytest.fixture
+async def h(tmp_path, monkeypatch):
+    h = Harness(tmp_path, monkeypatch)
+    await h.db.init()
+    yield h
+    from bot.handlers import common, order, orders, templates
+    for r in (common.router, templates.router, orders.router, order.router):
+        r._parent_router = None  # роутеры модульные — отвязываем для следующего теста
+    await h.cdek.close()
+    await h.db.close()
+
+
+async def test_full_delivery_order_then_template(h: Harness):
+    j = h.joined
+    await h.text("/start")
+    s = await h.text("📦 Новый заказ")
+    assert "ot:2" in h.buttons(s)
+    s = await h.click("ot:2")
+    assert "город отправления" in j(s)
+    s = await h.text("Моск")                       # один результат → выбирается сразу
+    assert "город получения" in j(s)
+    s = await h.text("Санкт")                      # два результата → список
+    assert "pk:tc:0" in h.buttons(s)
+    s = await h.click("pk:tc:0")
+    assert "Грузовые места" in j(s)
+    s = await h.text("1.5 30x20x10 Документы")
+    tariff_buttons = [b for b in h.buttons(s) if b.startswith("pk:tf:")]
+    assert len(tariff_buttons) == 3
+    # тарифы отсортированы по режиму: 139(1), 137(3), 136(4) → 136 = индекс 2
+    s = await h.click("pk:tf:2")
+    assert "Выбор пункта" in j(s) and "MSK100" in j(s)
+    s = await h.text("арбат")                      # поиск по адресу
+    assert "MSK200" in j(s) and "MSK100" not in j(s)
+    s = await h.click("pk:fp:0")
+    assert "Пункт отправки" in j(s) and "получения" in j(s)
+    s = await h.loc(55.757, 37.613)                # ближайшие к геолокации
+    assert j(s).index("MSK100") < j(s).index("MSK200")
+    s = await h.click("pk:tp:0")
+    assert "Страховка" in j(s)
+    s = await h.text("5000")
+    assert "Дополнительные услуги" in j(s)
+    await h.click("sv:t:SMS")
+    s = await h.click("sv:pg:pack")
+    assert "sv:+:CARTON_BOX_S" in h.buttons(s)
+    await h.click("sv:+:CARTON_BOX_S")
+    await h.click("sv:+:CARTON_BOX_S")
+    s = await h.click("sv:ok")
+    assert "Отправитель" in j(s)
+    s = await h.text("Петров Пётр\n+7 999 111-22-33\nООО Ромашка")
+    s = await h.text("Сидоров Сидор\n89990001122")
+    s = await h.click("cm:skip")
+    assert "Проверьте заказ" in j(s) and "420" in j(s) and "Коробка S" in j(s)
+
+    # --- частичное сохранение шаблона: по умолчанию тип+город+ПВЗ отправки+тариф+услуги+отправитель
+    s = await h.click("sm:tpl")
+    assert "ts:t:recipient" in h.buttons(s)
+    await h.click("ts:t:services")                 # снимаем услуги
+    s = await h.click("ts:ok")
+    s = await h.text("МСК ПВЗ 136")
+    assert "сохранён" in j(s) and "Проверьте заказ" in j(s)  # вернулись к сводке
+
+    # --- создание заказа
+    s = await h.click("sm:create")
+    assert "1234567890" in j(s)
+    o = h.fake.orders[-1]
+    assert o["type"] == 2 and o["tariff_code"] == 136
+    assert o["shipment_point"] == "MSK200" and o["delivery_point"] == "MSK100"
+    assert {"code": "INSURANCE", "parameter": "5000.0"} in o["services"]
+    assert {"code": "CARTON_BOX_S", "parameter": "2"} in o["services"]
+    assert o["packages"][0]["comment"] == "Документы" and o["packages"][0]["weight"] == 1500
+    assert o["recipient"]["phones"] == [{"number": "+79990001122"}]
+    assert o["sender"] == {"name": "Петров Пётр", "phones": [{"number": "+79991112233"}], "company": "ООО Ромашка"}
+
+    # --- печать накладной
+    s = await h.click("or:wb:1")
+    assert any(k == "SendDocument" for k, _, _ in s)
+
+    # --- заказ из шаблона: спрашивается только недостающее
+    s = await h.text("📦 Новый заказ")
+    assert "tp:use:1" in h.buttons(s)
+    s = await h.click("tp:use:1")
+    assert "город получения" in j(s)               # тип, город/ПВЗ отправки и тариф не спрашиваются
+    await h.text("Моск")
+    s = await h.text("2 40x30x20")
+    assert "Выбор пункта" in j(s) and "получения" in j(s)  # тариф из шаблона → сразу ПВЗ получения
+    s = await h.click("pk:tp:1")
+    s = await h.text("0")
+    assert "Дополнительные услуги" in j(s)         # услуги не сохраняли → спрашиваются
+    s = await h.click("sv:ok")
+    assert "Получатель" in j(s)                    # отправитель взят из шаблона
+    await h.text("Кузнецов\n+79995554433")
+    s = await h.click("cm:skip")
+    assert "Проверьте заказ" in j(s) and "MSK200" in j(s)
+
+    # --- редактирование из сводки и «назад»
+    s = await h.click("ed:tf")
+    assert "pk:tf:0" in h.buttons(s)
+    s = await h.click("pk:tf:0")                   # дверь-дверь → пункты сбрасываются, просит адреса
+    assert "адрес забора" in j(s)
+    s = await h.click("wz:back")                   # отменяет выбор тарифа
+    assert "pk:tf:0" in h.buttons(s)
+
+
+async def test_im_order_with_items_and_cod(h: Harness):
+    j = h.joined
+    await h.text("📦 Новый заказ")
+    s = await h.click("ot:1")
+    assert "num:gen" in h.buttons(s)
+    await h.click("num:gen")
+    await h.text("Моск")
+    await h.text("Моск")
+    s = await h.text("1 20x20x20\n0.5 10x10x10")
+    assert "место 1 из 2" in j(s).lower() or "месте 1 из 2" in j(s).lower()
+    s = await h.text("Футболка; 1000; 0.3; 2")
+    assert "2 из 2" in j(s)
+    s = await h.text("Кепка; 500; 0.2")
+    s = await h.click("pk:tf:1")                   # 137 склад-дверь
+    await h.click("pk:fp:0")
+    s = await h.text("ул. Ленина, 1, кв. 5")
+    assert "Что оплачивает получатель" in j(s) and "2 500" in j(s)
+    s = await h.click("cod:all")
+    await h.text("300")
+    await h.click("sv:ok")
+    s = await h.click("snd:skip")
+    await h.text("Иванов\n+79990000000")
+    await h.text("Позвонить заранее")
+    s = await h.click("sm:create")
+    o = h.fake.orders[-1]
+    assert o["type"] == 1 and o["number"].startswith("TG")
+    assert o["to_location"] == {"code": 44, "address": "ул. Ленина, 1, кв. 5"}
+    assert o["delivery_recipient_cost"] == {"value": 300.0}
+    assert o["packages"][1]["items"][0]["payment"] == {"value": 500.0}
+    assert "sender" not in o and o["comment"] == "Позвонить заранее"
+    assert "or:in:1" not in h.buttons(s)           # курьер только для «от двери»
+
+
+async def test_menu_button_interrupts_wizard(h: Harness):
+    await h.text("📦 Новый заказ")
+    await h.click("ot:2")
+    s = await h.text("🗂 Мои заказы")               # не воспринимается как название города
+    assert "Заказов пока нет" in h.joined(s)
+
+
+async def test_im_recipient_pays_delivery_with_markup(h: Harness):
+    j = h.joined
+    await h.text("📦 Новый заказ")
+    await h.click("ot:1")
+    await h.click("num:gen")
+    await h.text("Моск")
+    await h.text("Моск")
+    await h.text("1 20x20x20")
+    await h.text("Книга; 800; 0.9")
+    await h.click("pk:tf:2")                       # 136 склад-склад
+    await h.click("pk:fp:0")
+    s = await h.click("pk:tp:1")
+    assert "cod:delivery" in h.buttons(s)
+    s = await h.click("cod:delivery")
+    assert "cdm:10" in h.buttons(s)
+    s = await h.text("10%")
+    assert "по тарифу +10%" in j(s)
+    await h.click("sv:ok")
+    await h.click("snd:skip")
+    await h.text("Иванов\n+79990000000")
+    s = await h.click("cm:skip")
+    # тариф 350 ₽ +10% = 385 ₽, товары не оплачиваются получателем
+    assert "Взять с получателя:</b> доставка 385 ₽" in j(s) and "маржа на доставке: 35 ₽" in j(s)
+    # наценка сохраняется в шаблоне
+    await h.click("sm:tpl")
+    await h.click("ts:t:cod")
+    await h.click("ts:ok")
+    await h.text("ИМ наценка 10")
+    tpl = (await h.db.list_templates(UID))[0]["data"]
+    assert tpl["cod"] == {"mode": "delivery", "markup": 10.0}
+    await h.click("sm:create")
+    o = h.fake.orders[-1]
+    assert o["delivery_recipient_cost"] == {"value": 385.0}
+    assert o["packages"][0]["items"][0]["payment"] == {"value": 0}

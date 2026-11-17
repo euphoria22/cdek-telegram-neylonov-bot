@@ -4,7 +4,9 @@ import logging
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.middlewares.base import BaseRequestMiddleware
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, ErrorEvent, Update
 
@@ -14,6 +16,20 @@ from .db import Database
 from .handlers import common, order, orders, quick, rules, templates
 
 log = logging.getLogger("cdek_bot")
+
+
+class IgnoreHarmlessEditErrors(BaseRequestMiddleware):
+    """Telegram отказывает в правке сообщения, если ничего не изменилось (двойное нажатие, «Сбросить»
+    при пустом списке, «➖» на нуле) или кнопки уже убраны. Это не ошибка — молча пропускаем."""
+    HARMLESS = ("message is not modified", "message to edit not found", "message can't be edited")
+
+    async def __call__(self, make_request, bot, method):
+        try:
+            return await make_request(bot, method)
+        except TelegramBadRequest as ex:
+            if type(method).__name__.startswith("EditMessage") and any(h in ex.message for h in self.HARMLESS):
+                return True
+            raise
 
 
 class AccessMiddleware(BaseMiddleware):
@@ -43,8 +59,9 @@ async def on_error(event: ErrorEvent, bot: Bot):
         text = f"❗️ Ошибка СДЭК: {html.escape(str(exc))}"
         log.warning("CDEK error: %s", exc)
     else:
-        text = "❗️ Что-то пошло не так. Попробуйте ещё раз или /cancel."
-        log.exception("Unhandled error", exc_info=exc)
+        detail = html.escape(f"{type(exc).__name__}: {exc}"[:300])
+        text = f"❗️ Что-то пошло не так. Попробуйте ещё раз или /cancel.\n<i>{detail}</i>"
+        log.error("Unhandled error", exc_info=exc)
     if chat_id:
         try:
             await bot.send_message(chat_id, text)
@@ -94,6 +111,7 @@ async def main() -> None:
         storage = MemoryStorage()
 
     bot = Bot(cfg.bot_token, session=make_session(cfg), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot.session.middleware(IgnoreHarmlessEditErrors())
     cdek = CdekClient(cfg.cdek_base_url, cfg.cdek_client_id, cfg.cdek_client_secret)
     db = Database(cfg.db_path)
     await db.init()

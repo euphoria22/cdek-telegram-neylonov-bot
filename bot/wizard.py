@@ -632,8 +632,14 @@ async def show_summary(c: Ctx) -> None:
         calc = await c.cdek.calc_tariff(dr.build_calc(d))
     except CdekError as ex:
         err = str(ex)
+    except Exception as ex:  # сеть/таймаут — сводку всё равно показываем
+        logging.getLogger(__name__).warning("calc failed: %r", ex)
+        err = f"нет связи со СДЭК ({type(ex).__name__}), нажмите «🔄 Пересчитать»"
     await c.state.set_state(OrderSG.summary)
-    await c.send(dr.summary_text(d, calc, err), summary_kb(d))
+    text = dr.summary_text(d, calc, err)
+    if err and "additional_service_unavailable" in err:
+        text += "\n👉 Эта услуга недоступна по договору или для тарифа — уберите её: «✏️ Услуги/упаковка»."
+    await c.send(text, summary_kb(d))
 
 
 __all__ = ["OrderSG", "Ctx", "make_ctx", "ikb", "NAV", "main_menu", "render_list", "send_list", "render_services",
